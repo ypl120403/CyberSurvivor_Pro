@@ -24,6 +24,7 @@ class GameEngine:
 
         # 1. 加载数据
         registry.load()
+        WeaponFactory.auto_discover_logic()
 
         # 2. 初始化显示与物理组
         self.all_sprites = CameraGroup()
@@ -31,7 +32,7 @@ class GameEngine:
         self.projectile_group = pygame.sprite.Group()
         self.gem_group = pygame.sprite.Group()
 
-        WeaponFactory.auto_discover_logic()
+
         # 3. 创建玩家 (把自己传进去，以便面板访问管理器)
         self.player = Player((WIDTH // 2, HEIGHT // 2), [self.all_sprites], self)
         self.score = 0
