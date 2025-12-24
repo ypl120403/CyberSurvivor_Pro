@@ -1,8 +1,10 @@
 import pygame
 import math
+from core.registry import registry
 from combat.weapons.base_weapon import BaseWeapon
 
 
+@registry.register_logic("orbital")  # <--- 补上这一句
 class OrbitalWeapon(BaseWeapon):
     def __init__(self, player, groups, config):
         super().__init__(player, groups, config)
@@ -22,3 +24,7 @@ class OrbitalWeapon(BaseWeapon):
         for enemy in enemies:
             if current_pos.distance_to(enemy.pos) < 30:
                 enemy.take_damage(self.damage * dt * 5)
+
+    def draw_custom(self, screen, offset):
+        """如果想让环绕武器也有特殊特效绘制，可以在这里写逻辑"""
+        pass
