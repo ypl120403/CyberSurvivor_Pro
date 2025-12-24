@@ -1,0 +1,6 @@
+{
+    "id": "starter_gun",
+    "name": "赛博左轮",
+    "damage": 15,
+    "logic_type": "projectile"
+}

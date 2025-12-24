@@ -1,0 +1,13 @@
+{
+    "id": "starter_gun",
+    "name": "赛博左轮",
+    "logic_type": "projectile",
+    "max_level": 5,
+    "levels": {
+        "1": {"damage": 15, "cooldown": 450, "count": 1, "desc": "基础射线"},
+        "2": {"damage": 18, "cooldown": 400, "count": 1, "desc": "射速提升"},
+        "3": {"damage": 18, "cooldown": 400, "count": 2, "desc": "双重连发"},
+        "4": {"damage": 22, "cooldown": 350, "count": 2, "desc": "威力加强"},
+        "5": {"damage": 25, "cooldown": 300, "count": 3, "desc": "火力全开"}
+    }
+}

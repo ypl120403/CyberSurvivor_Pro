@@ -1,0 +1,6 @@
+[
+    {"id": "speed_up", "name": "神经加速", "desc": "移动速度 +15%", "stat": "move_speed", "value": 0.15},
+    {"id": "atk_up", "name": "强力模组", "desc": "攻击力 +20%", "stat": "damage_mult", "value": 0.2},
+    {"id": "pickup_up", "name": "磁力扩容", "desc": "拾取范围 +40%", "stat": "pickup_range", "value": 0.4},
+    {"id": "hp_up", "name": "纳米装甲", "desc": "最大血量 +20%", "stat": "max_health", "value": 0.2}
+]

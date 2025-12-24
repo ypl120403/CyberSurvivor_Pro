@@ -1,0 +1,8 @@
+{
+    "id": "basic_grunt",
+    "name": "赛博新兵",
+    "health": 30,
+    "move_speed": 180,
+    "score_value": 10,
+    "logic_type": "chaser"
+}
