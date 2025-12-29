@@ -1,0 +1,30 @@
+{
+    "id": "tesla",
+    "name": "雷电法王",
+    "desc": "掌控雷电的使者。被动：杀敌时有概率瞬间重置所有武器冷却。",
+
+    "theme_color": [0, 255, 255],
+    "base_stats": {
+        "health": 120,
+        "move_speed": 400,
+        "damage_mult": 1.2
+    },
+
+    "starting_weapon_config": {
+        "id": "tesla_bolt",
+        "name": "连锁电弧",
+        "logic_type": "projectile",
+        "damage": 25,
+        "cooldown": 800,
+        "count": 1,
+        "pierce": 3
+    },
+
+    "passives": [
+        {
+            "type": "refresh_on_kill",
+            "chance": 0.3,
+            "desc": "击杀敌人时，30%概率重置武器冷却"
+        }
+    ]
+}

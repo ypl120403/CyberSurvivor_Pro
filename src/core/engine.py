@@ -1,4 +1,3 @@
-# core/engine.py
 import pygame
 import sys
 from src.core.constants import *
@@ -8,6 +7,7 @@ from src.ui.screens.hud import HUD
 from src.ui.screens.upgrade_panel import UpgradePanel
 from src.core.event_bus import bus
 
+# 场景导入
 from src.scenes.menu_scene import MenuScene
 from src.scenes.combat_scene import CombatScene
 
@@ -20,105 +20,125 @@ class GameEngine:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        # 1. 执行一劳永逸的全量加载 (JSON + 资产)
+        # 1. 核心系统一键同步
         registry.load_all()
 
-        # 武器逻辑自动发现
+        # 武器工厂自动扫描
         from src.combat.weapon_factory import WeaponFactory
         WeaponFactory.auto_discover_logic()
 
-        # 2. UI 管理器初始化
+        # 2. UI 系统
         self.ui_manager = UIManager(self)
+        self._init_dummy_player()  # 封装初始化占位符逻辑
 
-        # 完善的 Dummy 玩家对象：模拟真正的属性结构，确保进入战斗前 HUD 不崩溃
-        # 给它一个符合 StatsComponent 结构的 stats 属性
-        class DummyStats:
-            def __init__(self):
-                self.max_health = type('val', (object,), {'value': 100})()
-
-        self.player_dummy = type('obj', (object,), {
-            'current_hp': 0,
-            'current_xp': 0,
-            'xp_required': 100,
-            'level': 1,
-            'stats': DummyStats()
-        })
-
-        self.ui_manager.add_menu('hud', HUD(self.player_dummy))
-        self.ui_manager.add_menu('upgrade', UpgradePanel(self.player_dummy))
-
-        # 3. 场景与状态控制
+        # 3. 场景与状态
         self.scene = None
         self.state = "MAIN_MENU"
         self.score = 0
-
-        # 启动即进入菜单
         self.switch_scene("MENU")
 
+        # 4. 全球事件监听
         bus.subscribe("RESUME_GAME", self.resume)
 
+    def _init_dummy_player(self):
+        """规则：创建一个标准接口的假人，防止菜单界面报错"""
+
+        class DummyStats:
+            def __init__(self):
+                self.max_health = type('v', (object,), {'value': 100})()
+
+        self.player_dummy = type('obj', (object,), {
+            'current_hp': 0, 'current_xp': 0, 'xp_required': 100, 'level': 1,
+            'stats': DummyStats(),
+            'char_config': {}  # 预留配置接口
+        })
+        self.ui_manager.add_menu('hud', HUD(self.player_dummy))
+        self.ui_manager.add_menu('upgrade', UpgradePanel(self.player_dummy))
+
     def switch_scene(self, scene_type, char_config=None):
-        """核心：增强版切换场景方法，支持角色配置注入"""
+        """一劳永逸的场景切换逻辑"""
         if scene_type == "MENU":
             self.scene = MenuScene(self)
             self.state = "MAIN_MENU"
-
         elif scene_type == "COMBAT":
-            # 规则：如果未指定角色，默认加载注册中心里的第一个角色 (兜底)
-            if char_config is None:
+            # 兜底：如果没有选人，默认加载第一个
+            if not char_config:
                 char_config = list(registry.characters.values())[0] if registry.characters else {}
 
-            # 将选中的角色配置注入战斗场景
+            # 实例化战斗场景
             self.scene = CombatScene(self, char_config)
             self.state = "PLAYING"
 
-            # 核心同步：将 UI 面板的监听目标切换为战斗场景中真实的 Player 实例
+            # 自动重定向 UI 的监听目标
             self.ui_manager.menus['hud'].player = self.scene.player
             self.ui_manager.menus['upgrade'].player = self.scene.player
 
+    def on_enemy_killed(self, enemy):
+        """
+        核心优化：全球死亡广播站
+        在这里实现“雷电法王”刷新的点火开关！
+        """
+        # 1. 基础逻辑：加分
+        self.score += enemy.config.get("score_value", 10)
+
+        # 2. 掉落逻辑：生成经验宝石
+        if hasattr(self.scene, 'all_sprites'):
+            from src.entities.pickups.exp_gem import ExperienceGem
+            ExperienceGem(enemy.rect.center, [self.scene.all_sprites, self.scene.gem_group], self.scene.player)
+
+        # 3. 【核心点火】通知玩家触发“击杀类”被动技能 (如雷电法王的冷却刷新)
+        if hasattr(self.scene, 'player'):
+            # 调用我们在 Player.py 中写好的通用被动接口
+            self.scene.player.trigger_passives("on_kill")
+        if hasattr(self.scene, 'player'):
+            self.scene.player.on_enemy_killed()
+
     def resume(self):
         self.state = "PLAYING"
-
-    def on_enemy_killed(self, enemy):
-        """全局死亡回调"""
-        self.score += enemy.config.get("score_value", 10)
-        from src.entities.pickups.exp_gem import ExperienceGem
-        if hasattr(self.scene, 'all_sprites'):
-            ExperienceGem(enemy.rect.center, [self.scene.all_sprites, self.scene.gem_group], self.scene.player)
 
     def run(self):
         while self.running:
             dt = self.clock.tick(FPS) / 1000.0
 
+            # --- 事件分发 ---
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self._handle_pause()
 
-                # 暂停逻辑拦截
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        if self.state == "PLAYING":
-                            self.state = "PAUSED"
-                        elif self.state == "PAUSED":
-                            self.state = "PLAYING"
+            # --- 逻辑更新 ---
+            self._update_dispatch(dt)
 
-            # 逻辑分发
-            if self.state == "MAIN_MENU":
-                self.scene.update(dt)
-            elif self.state == "PLAYING":
-                self.scene.update(dt)
-                self.ui_manager.update(dt)
-            # PAUSED 状态下逻辑静止
-
-            # 渲染分发
-            if self.state == "MAIN_MENU":
-                self.scene.draw()
-            else:
-                # 战斗相关场景 (PLAYING, PAUSED, UPGRADING) 均渲染场景内容 + UI
-                self.scene.draw()
-                self.ui_manager.draw(self.score)
+            # --- 画面渲染 ---
+            self._draw_dispatch()
 
             pygame.display.flip()
+
+    def _handle_pause(self):
+        """暂停切换规则"""
+        if self.state == "PLAYING":
+            self.state = "PAUSED"
+        elif self.state == "PAUSED":
+            self.state = "PLAYING"
+
+    def _update_dispatch(self, dt):
+        """一劳永逸的逻辑分发"""
+        if self.state == "MAIN_MENU":
+            self.scene.update(dt)
+        elif self.state == "PLAYING":
+            self.scene.update(dt)
+            self.ui_manager.update(dt)
+        # 升级中和暂停中，不更新 scene 逻辑，从而实现“画面凝固”
+
+    def _draw_dispatch(self):
+        """一劳永逸的渲染分发"""
+        if self.state == "MAIN_MENU":
+            self.scene.draw()
+        else:
+            # 战斗相关的全状态（玩、停、升）都要画背景和 UI
+            self.scene.draw()
+            self.ui_manager.draw(self.score)
 
 
 if __name__ == '__main__':
