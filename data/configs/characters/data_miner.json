@@ -1,0 +1,12 @@
+{
+    "id": "data_miner",
+    "name": "数据矿工",
+    "desc": "擅长收集，经验获取率极高。",
+    "starting_weapon": "starter_gun",
+    "base_stats": {
+        "health": 110,
+        "move_speed": 340,
+        "pickup_range": 350,
+        "exp_gain": 1.5
+    }
+}

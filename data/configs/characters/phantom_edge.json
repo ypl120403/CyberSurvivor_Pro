@@ -1,0 +1,11 @@
+{
+    "id": "phantom_edge",
+    "name": "影刃",
+    "desc": "极速突进，初始装备轨道环绕器。",
+    "starting_weapon": "orbital",
+    "base_stats": {
+        "health": 70,
+        "move_speed": 520,
+        "damage_mult": 1.5
+    }
+}
