@@ -73,25 +73,25 @@ class GameEngine:
             self.ui_manager.menus['hud'].player = self.scene.player
             self.ui_manager.menus['upgrade'].player = self.scene.player
 
+    # src/core/engine.py
+
     def on_enemy_killed(self, enemy):
-        """
-        核心优化：全球死亡广播站
-        在这里实现“雷电法王”刷新的点火开关！
-        """
         # 1. 基础逻辑：加分
         self.score += enemy.config.get("score_value", 10)
 
-        # 2. 掉落逻辑：生成经验宝石
+        # 2. 掉落经验
         if hasattr(self.scene, 'all_sprites'):
             from src.entities.pickups.exp_gem import ExperienceGem
             ExperienceGem(enemy.rect.center, [self.scene.all_sprites, self.scene.gem_group], self.scene.player)
 
-        # 3. 【核心点火】通知玩家触发“击杀类”被动技能 (如雷电法王的冷却刷新)
+        # 3. 【点火】通过 EventBus 发布全球信号
+        # 这样被动系统、UI系统、音效系统都可以独立响应
+        from src.core.event_bus import bus
+        bus.emit("ENEMY_DIED", enemy=enemy, killer=self.scene.player)
+
+        # 兼容现有调用（保持 player 内部被动触发）
         if hasattr(self.scene, 'player'):
-            # 调用我们在 Player.py 中写好的通用被动接口
             self.scene.player.trigger_passives("on_kill")
-        if hasattr(self.scene, 'player'):
-            self.scene.player.on_enemy_killed()
 
     def resume(self):
         self.state = "PLAYING"

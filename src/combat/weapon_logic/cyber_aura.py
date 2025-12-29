@@ -1,6 +1,6 @@
 import pygame
 from src.core.registry import registry
-from src.combat.weapons.base_weapon import BaseWeapon
+from src.combat.weapon_logic.base_weapon import BaseWeapon
 
 @registry.register_logic("cyber_aura")
 class CyberAuraWeapon(BaseWeapon):

@@ -52,22 +52,30 @@ class Player(BaseEntity):
 
     # --- 一劳永逸的被动系统 ---
 
+    # src/entities/player.py
+
     def trigger_passives(self, trigger_type):
         """
-        核心规则：所有被动技能的触发入口。
-        trigger_type 可以是: "on_kill", "on_hurt", "on_level_up"
+        根据触发类型遍历 JSON 定义的所有被动
         """
         for p_data in self.passives:
+            # JSON 中的 type 需对应触发点 (如 "on_kill")
             if p_data.get('type') == trigger_type:
                 self._execute_passive_logic(p_data)
 
     def _execute_passive_logic(self, p_data):
-        """具体的被动行为分发"""
-        # 1. 刷新冷却 (雷电法王的无限刷新)
-        if p_data['type'] == "on_kill":
-            # 杀敌刷新逻辑 (refresh_on_kill)
-            if random.random() < p_data.get('chance', 0):
+        """
+        具体的行为逻辑：
+        这里可以根据 p_data.get('effect') 来路由不同的功能
+        """
+        # 获取效果类型 (在 JSON 中统一定义为 "refresh_cooldown")
+        effect = p_data.get('effect')
+        chance = p_data.get('chance', 1.0)  # 默认 100%
+
+        if effect == "refresh_cooldown":
+            if random.random() < chance:
                 self.refresh_weapon_cooldowns()
+                # 视觉反馈：调用 UI Manager 弹出提示或震屏（后续可加）
 
     def refresh_weapon_cooldowns(self):
         """逻辑：瞬间重置所有武器冷却时间"""

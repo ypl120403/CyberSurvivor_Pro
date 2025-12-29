@@ -1,9 +1,10 @@
-# ui/menus/upgrade_panel.py (全量替换)
+# src/ui/screens/upgrade_panel.py
 import pygame
 import random
 from src.core.constants import *
 from src.core.registry import registry
 from src.core.event_bus import bus
+
 
 class UpgradePanel:
     def __init__(self, player):
@@ -36,19 +37,33 @@ class UpgradePanel:
         self.show_time = pygame.time.get_ticks()
 
     def _generate_options(self):
-        """核心修复点：通过当前场景获取武器管理器"""
+        """核心修复点：智能识别【全局武器】与【专属武器】"""
         pool = []
-        # 1. 属性池 (从 Registry 加载)
+
+        # 1. 属性池
         for item in registry.upgrades:
             pool.append({"type": "stat", "name": item['name'], "desc": item['desc'], "raw_data": item})
 
-        # 2. 武器池 (修复：去当前活跃场景 scene 找 weapon_manager)
+        # 2. 武器池
         scene = self.player.engine.scene
         if hasattr(scene, 'weapon_manager'):
-            weapon_cands = scene.weapon_manager.get_upgrade_candidates()
+            wm = scene.weapon_manager
+            weapon_cands = wm.get_upgrade_candidates()
+
             for cand in weapon_cands:
-                w_name = registry.weapons[cand['id']]['name']
-                w_desc = "新武器获得" if cand['type'] == 'weapon_new' else f"升级至 LV.{cand['level']}"
+                # --- 重点修复逻辑 ---
+                if cand['type'] == 'weapon_upgrade':
+                    # 升级已有武器：直接从武器实例的 config 里拿名字（解决 tesla_bolt 缺失问题）
+                    weapon_inst = wm.weapons.get(cand['id'])
+                    w_name = weapon_inst.config.get('name', '未知武器')
+                    w_desc = f"强化至 LV.{cand['level']}"
+                else:
+                    # 新武器：从注册表拿名字
+                    w_config = registry.weapons.get(cand['id'])
+                    if not w_config: continue  # 容错
+                    w_name = w_config.get('name', '新武器')
+                    w_desc = "点击获得新武装"
+
                 pool.append({"type": cand['type'], "name": w_name, "desc": w_desc, "raw_data": cand})
 
         # 随机抽取 3 个
@@ -67,7 +82,7 @@ class UpgradePanel:
         mouse_pos = pygame.mouse.get_pos()
         clicked = pygame.mouse.get_pressed()[0]
 
-        # 蒙版半透明背景
+        # 蒙版
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 210))
         self.display_surface.blit(overlay, (0, 0))
@@ -82,9 +97,10 @@ class UpgradePanel:
 
             color = (70, 75, 100) if is_hover else (45, 48, 62)
             pygame.draw.rect(self.display_surface, color, rect, border_radius=15)
-            pygame.draw.rect(self.display_surface, (0, 255, 240) if is_hover else (80, 80, 100), rect, 3, border_radius=15)
+            pygame.draw.rect(self.display_surface, (0, 255, 240) if is_hover else (80, 80, 100), rect, 3,
+                             border_radius=15)
 
-            # 文字
+            # 绘制文字
             t_surf = self.font_title.render(opt['name'], True, (255, 255, 255))
             d_surf = self.font_desc.render(opt['desc'], True, (200, 200, 200))
             self.display_surface.blit(t_surf, (rect.x + 20, rect.y + 40))
@@ -105,14 +121,14 @@ class UpgradePanel:
                 self.reroll()
 
     def apply_upgrade(self, opt):
-        """核心修复点：通过场景执行升级"""
         raw = opt['raw_data']
         if opt['type'] == 'stat':
             self.player.stats.add_modifier(raw['stat'], raw['value'])
-            if raw['stat'] in ["health", "max_health"]:
-                self.player.current_hp = self.player.stats.max_health.value
+            # 补血逻辑：如果是加生命上限，顺便把当前血量也加上去
+            if raw['stat'] == "max_health":
+                add_hp = self.player.stats.max_health.base_value * raw['value']
+                self.player.current_hp += add_hp
         else:
-            # 升级或获取武器：同样去当前场景 scene 找 weapon_manager
             scene = self.player.engine.scene
             if hasattr(scene, 'weapon_manager'):
                 scene.weapon_manager.add_or_upgrade_weapon(raw['id'])

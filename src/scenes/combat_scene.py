@@ -41,13 +41,18 @@ class CombatScene(BaseScene):
         )
 
         # 一劳永逸：根据 JSON 配置自动加载初始武器，而不是写死 "starter_gun"
-        init_weapon = char_config.get("starting_weapon", "starter_gun")
+        init_weapon = char_config.get("starting_weapon_config") or char_config.get("starting_weapon", "starter_gun")
+
         self.weapon_manager.add_or_upgrade_weapon(init_weapon)
 
         # 4. 获取 UI 引用
         self.hud = engine.ui_manager.menus['hud']
         self.upgrade_panel = engine.ui_manager.menus['upgrade']
 
+        # --- 粘在这里：一劳永逸的初始武器装配 ---
+        # 逻辑：优先看 JSON 里有没有起手配置，没有就拿 ID
+        init_weapon = char_config.get("starting_weapon_config") or char_config.get("starting_weapon", "starter_gun")
+        self.weapon_manager.add_or_upgrade_weapon(init_weapon)
     def update(self, dt):
         # 刷怪逻辑 (保持原样)
         self.spawn_timer += dt
@@ -59,19 +64,14 @@ class CombatScene(BaseScene):
         self.all_sprites.update(dt)
         self.weapon_manager.update(dt)
 
-        # 碰撞处理：子弹 vs 敌人 (保持原样)
+        # 碰撞处理：子弹 vs 敌人
         hits = pygame.sprite.groupcollide(self.enemy_group, self.projectile_group, False, False)
         for enemy, bullets in hits.items():
             for bullet in bullets:
-                self.engine.ui_manager.spawn_damage_text(enemy.rect.center, bullet.damage)
-                if DamageSystem.handle_collision(bullet, enemy):
-                    self.engine.on_enemy_killed(enemy)
+                # 统一调用 apply_damage，数字和掉落会自动处理
+                DamageSystem.handle_collision(bullet, enemy, self.engine)
 
-        # 全局死亡检测 (保持原样)
-        for enemy in self.enemy_group:
-            if enemy.hp <= 0:
-                self.engine.on_enemy_killed(enemy)
-                enemy.kill()
+        # 全局死亡检测不需要了，因为 apply_damage 已经处理了
 
         # 玩家受击与捡宝石 (保持原样)
         if pygame.sprite.spritecollide(self.player, self.enemy_group, False):
