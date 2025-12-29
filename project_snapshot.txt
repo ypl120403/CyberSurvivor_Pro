@@ -1,0 +1,2059 @@
+项目：CyberSurvivor_Pro 全量代码快照
+技术栈：Python 3.14 + pygame-ce 2.5.6
+资产目录说明：assets 文件夹用于存放后续的贴图(textures)、音效(sfx)和字体(fonts)
+
+
+==============================
+FILE: core\camera.py
+==============================
+import pygame
+from core.constants import *
+
+
+class CameraGroup(pygame.sprite.Group):
+    def __init__(self):
+        super().__init__()
+        self.display_surface = pygame.display.get_surface()
+        self.offset = pygame.math.Vector2()
+
+    def custom_draw(self, player):
+        # 1. 摄像机丝滑跟随逻辑
+        # 0.1 是平滑系数，数值越小越丝滑，玩家离中心就越远
+        self.offset.x += (player.rect.centerx - WIDTH // 2 - self.offset.x) * 0.1
+        self.offset.y += (player.rect.centery - HEIGHT // 2 - self.offset.y) * 0.1
+
+        # 2. 填充底色
+        self.display_surface.fill(COLOR_BG)
+
+        # 3. 绘制无限网格 (核心参考物)
+        # 根据摄像机偏移计算网格的起始位置
+        grid_range = 2  # 绘制范围倍数
+        start_x = -int(self.offset.x % TILE_SIZE)
+        start_y = -int(self.offset.y % TILE_SIZE)
+
+        for x in range(start_x - TILE_SIZE, WIDTH + TILE_SIZE, TILE_SIZE):
+            pygame.draw.line(self.display_surface, COLOR_GRID, (x, 0), (x, HEIGHT))
+        for y in range(start_y - TILE_SIZE, HEIGHT + TILE_SIZE, TILE_SIZE):
+            pygame.draw.line(self.display_surface, COLOR_GRID, (0, y), (WIDTH, y))
+
+        # 4. 排序绘制所有精灵 (Y-sort 伪3D)
+        for sprite in sorted(self.sprites(), key=lambda s: (getattr(s, 'z_index', 0), s.rect.centery)):
+            offset_pos = sprite.rect.topleft - self.offset
+            self.display_surface.blit(sprite.image, offset_pos)
+==============================
+FILE: core\constants.py
+==============================
+import pygame
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+TILE_SIZE = 64
+LAYER_BG, LAYER_PICKUP, LAYER_ENEMY, LAYER_PLAYER, LAYER_PROJECTILE, LAYER_UI = 0, 10, 20, 30, 40, 100
+COLOR_BG = (12, 12, 20)
+COLOR_GRID = (35, 35, 55)
+COLOR_PLAYER = (0, 255, 240)
+COLOR_ENEMY = (255, 50, 80)
+==============================
+FILE: core\engine.py
+==============================
+import pygame
+import sys
+from core.constants import *
+from core.registry import registry
+from ui.ui_manager import UIManager
+from ui.menus.hud import HUD
+from ui.menus.upgrade_panel import UpgradePanel
+from core.event_bus import bus
+
+# 导入我们的新场景
+from systems.menu_scene import MenuScene
+from systems.combat_scene import CombatScene
+
+
+class GameEngine:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.clock = pygame.time.Clock()
+        self.running = True
+
+        # 1. 全局数据加载
+        registry.load()
+        from combat.weapon_factory import WeaponFactory
+        WeaponFactory.auto_discover_logic()
+
+        # 2. UI 管理器 (全局存在)
+        self.ui_manager = UIManager(self)
+        self.player_dummy = type('obj', (object,),
+                                 {'current_hp': 0, 'current_xp': 0, 'xp_required': 100, 'level': 1})  # 临时占位
+        self.ui_manager.add_menu('hud', HUD(self.player_dummy))
+        self.ui_manager.add_menu('upgrade', UpgradePanel(self.player_dummy))
+
+        # 3. 场景控制
+        self.scene = None
+        self.state = "MAIN_MENU"
+        self.score = 0
+        self.switch_scene("MENU")
+
+        bus.subscribe("RESUME_GAME", self.resume)
+
+    def switch_scene(self, scene_type):
+        """核心：切换场景的方法"""
+        if scene_type == "MENU":
+            self.scene = MenuScene(self)
+            self.state = "MAIN_MENU"
+        elif scene_type == "COMBAT":
+            self.scene = CombatScene(self)
+            self.state = "PLAYING"
+            # 战斗开始后，要把 HUD 的玩家对象更新为真正的玩家
+            self.ui_manager.menus['hud'].player = self.scene.player
+            self.ui_manager.menus['upgrade'].player = self.scene.player
+
+    def resume(self):
+        self.state = "PLAYING"
+
+    def on_enemy_killed(self, enemy):
+        """全局死亡回调"""
+        self.score += enemy.config.get("score_value", 10)
+        from entities.pickups.exp_gem import ExperienceGem
+        # 经验宝石需要加入到当前场景的组里
+        ExperienceGem(enemy.rect.center, [self.scene.all_sprites, self.scene.gem_group], self.scene.player)
+
+    # core/engine.py 的 run 方法中的循环部分建议如下：
+
+    def run(self):
+        while self.running:
+            dt = self.clock.tick(FPS) / 1000.0
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+
+                # 暂停逻辑拦截
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        if self.state == "PLAYING":
+                            self.state = "PAUSED"
+                        elif self.state == "PAUSED":
+                            self.state = "PLAYING"
+
+            # 逻辑分发
+            if self.state == "MAIN_MENU":
+                self.scene.update(dt)
+            elif self.state == "PLAYING":
+                self.scene.update(dt)
+                self.ui_manager.update(dt)
+            # 注意：PAUSED 状态下不更新 scene 逻辑，从而实现“画面凝固”
+
+            # 渲染分发 (保持你之前的代码结构)
+            if self.state == "MAIN_MENU":
+                self.scene.draw()
+            else:
+                self.scene.draw()
+                self.ui_manager.draw(self.score)
+
+            pygame.display.flip()
+
+
+if __name__ == '__main__':
+    GameEngine().run()
+==============================
+FILE: core\event_bus.py
+==============================
+class EventBus:
+    """
+    事件总线：解耦神器。
+    让不同的系统（如：升级系统和引擎）通过发送消息通信，而不是直接调用。
+    """
+    def __init__(self):
+        self.listeners = {}
+
+    def subscribe(self, event_type, callback):
+        if event_type not in self.listeners:
+            self.listeners[event_type] = []
+        self.listeners[event_type].append(callback)
+
+    def emit(self, event_type, **kwargs):
+        if event_type in self.listeners:
+            for callback in self.listeners[event_type]:
+                callback(**kwargs)
+
+# 创建全局唯一的实例
+bus = EventBus()
+==============================
+FILE: core\registry.py
+==============================
+# core/registry.py
+import os
+import json
+import pygame
+
+
+class Registry:
+    def __init__(self):
+        # 1. 结构化存储：分类存放所有 JSON 配置
+        self.weapons = {}
+        self.enemies = {}
+        self.characters = {}
+        self.waves = {}  # 预留给未来的波次系统
+        self.upgrades = []
+
+        # 2. 逻辑映射：存放 Python 类逻辑 (由装饰器注入)
+        self.weapon_logic = {}
+
+        # 3. 资产库：存放加载好的 Surface 对象
+        self.textures = {}
+
+    def register_logic(self, logic_id):
+        """规则：使用装饰器将 Python 类关联到 JSON 配置的 logic_type"""
+
+        def wrapper(cls):
+            self.weapon_logic[logic_id] = cls
+            return cls
+
+        return wrapper
+
+    def load_all(self):
+        """规则：一键启动所有规则化加载"""
+        self._load_configs()
+        self._load_assets()
+        print(f"🚀 Registry 全量同步完成")
+
+    def _load_configs(self):
+        """规则：配置驱动。只需增加字典项即可支持新类型 JSON"""
+        config_map = {
+            'weapons': 'data/configs/weapons',
+            'enemies': 'data/configs/enemies',
+            'characters': 'data/configs/characters',
+            'waves': 'data/configs/waves'
+        }
+
+        for attr, path in config_map.items():
+            if not os.path.exists(path):
+                continue
+
+            for f in os.listdir(path):
+                if f.endswith(".json"):
+                    try:
+                        with open(os.path.join(path, f), 'r', encoding='utf-8') as file:
+                            data = json.load(file)
+                            # 规则：所有配置文件必须包含 'id' 字段作为 Key
+                            if 'id' in data:
+                                getattr(self, attr)[data['id']] = data
+                    except Exception as e:
+                        print(f"❌ 配置文件解析失败 [{f}]: {e}")
+
+        # 独立处理特殊的数组型配置
+        upgrade_file = "data/configs/upgrades.json"
+        if os.path.exists(upgrade_file):
+            with open(upgrade_file, 'r', encoding='utf-8') as f:
+                self.upgrades = json.load(f)
+
+    def _load_assets(self):
+        """规则：资产自动发现。扫描 assets/textures 下所有图片，自动生成层级 ID"""
+        base_path = "assets/textures"
+        if not os.path.exists(base_path):
+            os.makedirs(base_path, exist_ok=True)
+            return
+
+        for root, _, files in os.walk(base_path):
+            for f in files:
+                if f.lower().endswith(('.png', '.jpg', '.webp')):
+                    full_path = os.path.join(root, f)
+
+                    # 规则：将相对路径转换为 ID。
+                    # 例如: assets/textures/ui/icons/hp.png -> ID: 'ui/icons/hp'
+                    rel_path = os.path.relpath(full_path, base_path)
+                    asset_id = os.path.splitext(rel_path)[0].replace("\\", "/")
+
+                    try:
+                        # 自动处理透明度并优化渲染效率
+                        surf = pygame.image.load(full_path).convert_alpha()
+                        self.textures[asset_id] = surf
+                    except Exception as e:
+                        print(f"❌ 资产加载失败 [{asset_id}]: {e}")
+
+    def get_texture(self, asset_id, fallback_color=(255, 0, 255)):
+        """规则：安全的资产获取。如果贴图缺失，自动生成一个紫色方块补丁"""
+        if asset_id in self.textures:
+            return self.textures[asset_id]
+
+        # 工业级补救：动态生成错误提示图
+        print(f"⚠️ 资产缺失: {asset_id}，已生成占位符")
+        error_surf = pygame.Surface((32, 32))
+        error_surf.fill(fallback_color)
+        self.textures[asset_id] = error_surf
+        return error_surf
+
+
+# 创建全局单例
+registry = Registry()
+==============================
+FILE: core\save_manager.py
+==============================
+# core/save_manager.py
+import json
+import os
+
+class SaveManager:
+    def __init__(self):
+        self.path = "data/save.json"
+        self.data = {
+            "currency": 0,
+            "unlocked_characters": ["cypher_ghost"],
+            "meta_upgrades": {"hp": 0, "atk": 0, "speed": 0},
+            "achievements": []
+        }
+        self.load()
+
+    def load(self):
+        if os.path.exists(self.path):
+            with open(self.path, "r") as f:
+                self.data.update(json.load(f))
+
+    def save(self):
+        os.makedirs("data", exist_ok=True)
+        with open(self.path, "w") as f:
+            json.dump(self.data, f, indent=4)
+
+save_manager = SaveManager()
+==============================
+FILE: core\__init__.py
+==============================
+
+==============================
+FILE: systems\base_scene.py
+==============================
+import pygame
+
+class BaseScene:
+    """所有场景的基类：菜单、战斗、结算都继承自它"""
+    def __init__(self, engine):
+        self.engine = engine
+        self.screen = pygame.display.get_surface()
+
+    def update(self, dt):
+        pass
+
+    def draw(self):
+        pass
+==============================
+FILE: systems\combat_scene.py
+==============================
+import pygame
+import random
+from systems.base_scene import BaseScene
+from core.constants import *
+from core.registry import registry
+from core.camera import CameraGroup
+from entities.player import Player
+from combat.weapon_manager import WeaponManager
+from combat.weapon_factory import WeaponFactory
+from combat.damage_system import DamageSystem
+from entities.enemies.base_enemy import Enemy
+from ui.menus.hud import HUD
+from ui.menus.upgrade_panel import UpgradePanel
+
+class CombatScene(BaseScene):
+    def __init__(self, engine):
+        super().__init__(engine)
+        # 1. 初始化显示与物理组
+        self.all_sprites = CameraGroup()
+        self.enemy_group = pygame.sprite.Group()
+        self.projectile_group = pygame.sprite.Group()
+        self.gem_group = pygame.sprite.Group()
+
+        # 2. 创建核心实体 (把 engine 传给 Player 以便它访问 ui_manager)
+        self.player = Player((WIDTH // 2, HEIGHT // 2), [self.all_sprites], engine)
+        self.spawn_timer = 0
+
+        # 3. 初始化武器管理器
+        self.weapon_manager = WeaponManager(
+            self.player,
+            self.enemy_group,
+            [self.all_sprites, self.projectile_group]
+        )
+        self.weapon_manager.add_or_upgrade_weapon("starter_gun")
+
+        # 4. 获取 HUD 和 升级面板的引用
+        self.hud = engine.ui_manager.menus['hud']
+        self.upgrade_panel = engine.ui_manager.menus['upgrade']
+
+    def update(self, dt):
+        # 刷怪逻辑
+        self.spawn_timer += dt
+        if self.spawn_timer >= 1.5:
+            self._spawn_enemy()
+            self.spawn_timer = 0
+
+        # 系统更新
+        self.all_sprites.update(dt)
+        self.weapon_manager.update(dt)
+
+        # 碰撞处理：子弹 vs 敌人
+        hits = pygame.sprite.groupcollide(self.enemy_group, self.projectile_group, False, False)
+        for enemy, bullets in hits.items():
+            for bullet in bullets:
+                self.engine.ui_manager.spawn_damage_text(enemy.rect.center, bullet.damage)
+                if DamageSystem.handle_collision(bullet, enemy):
+                    self.engine.on_enemy_killed(enemy)
+
+        # 全局死亡检测 (针对光环杀敌)
+        for enemy in self.enemy_group:
+            if enemy.hp <= 0:
+                self.engine.on_enemy_killed(enemy)
+                enemy.kill()
+
+        # 玩家受击与捡宝石 (逻辑同原 engine.py)
+        if pygame.sprite.spritecollide(self.player, self.enemy_group, False):
+            self.player.take_damage(1)
+
+        gems_hit = pygame.sprite.spritecollide(self.player, self.gem_group, True)
+        for gem in gems_hit:
+            self.player.gain_xp(gem.xp_value)
+            if self.player.current_xp >= self.player.xp_required:
+                self.player.perform_level_up()
+                self.engine.state = "UPGRADING"
+                self.upgrade_panel.show()
+
+    def draw(self):
+        # 渲染流水线
+        self.all_sprites.custom_draw(self.player)
+        self.weapon_manager.draw_weapons(self.screen, self.all_sprites.offset)
+
+    def _spawn_enemy(self):
+        angle = random.uniform(0, 360)
+        dist = 850
+        spawn_pos = self.player.pos + pygame.math.Vector2(1, 0).rotate(angle) * dist
+        config = registry.enemies.get("basic_grunt")
+        if config:
+            Enemy(spawn_pos, [self.all_sprites, self.enemy_group], config, self.player)
+==============================
+FILE: systems\menu_scene.py
+==============================
+# systems/menu_scene.py
+import pygame
+from systems.base_scene import BaseScene
+from ui.components import CyberButton
+from core.constants import *
+from core.save_manager import save_manager
+from core.registry import registry  # 必须导入注册中心
+
+
+class MenuScene(BaseScene):
+    def __init__(self, engine):
+        super().__init__(engine)
+        self.state = "MAIN"
+
+        # 字体初始化
+        self.font_title = pygame.font.SysFont("impact", 90)
+        self.font_sub = pygame.font.SysFont("microsoftyahei", 30, bold=True)
+        self.font_info = pygame.font.SysFont("microsoftyahei", 18)
+
+        # 1. 角色列表与索引 (一劳永逸的核心)
+        self.char_list = list(registry.characters.values())
+        self.char_index = 0
+
+        # 2. 按钮定义
+        self.main_btns = {
+            "A": CyberButton("作战中心 (COMBAT HUB)", (100, 250), (350, 50), self.font_sub),
+            "B": CyberButton("神经增强 (META-UPGRADES)", (100, 320), (350, 50), self.font_sub),
+            "C": CyberButton("档案库 (ARCHIVE)", (100, 390), (350, 50), self.font_sub),
+            "D": CyberButton("协议配置 (SETTINGS)", (100, 460), (350, 50), self.font_sub),
+            "E": CyberButton("切断连接 (QUIT)", (100, 530), (350, 50), self.font_sub)
+        }
+
+        # 作战中心专用切换按钮
+        self.prev_btn = CyberButton("<", (WIDTH // 2 - 260, 300), (50, 50), self.font_sub)
+        self.next_btn = CyberButton(">", (WIDTH // 2 + 210, 300), (50, 50), self.font_sub)
+        self.start_btn = CyberButton("同步意识 (START)", (WIDTH // 2 - 125, 550), (250, 60), self.font_sub,
+                                     color=(255, 200, 0))
+
+        self.back_btn = CyberButton("返回上一级", (WIDTH - 250, HEIGHT - 100), (200, 50), self.font_sub)
+
+    def update(self, dt):
+        mouse_pos = pygame.mouse.get_pos()
+        clicked = pygame.mouse.get_pressed()[0]
+
+        if self.state == "MAIN":
+            for btn in self.main_btns.values(): btn.update(mouse_pos)
+            if clicked:
+                if self.main_btns["A"].is_hovered:
+                    self.state = "COMBAT_HUB"
+                elif self.main_btns["B"].is_hovered:
+                    self.state = "UPGRADES"
+                elif self.main_btns["E"].is_hovered:
+                    pygame.quit(); import sys; sys.exit()
+                if any(b.is_hovered for b in self.main_btns.values()): pygame.time.delay(150)
+
+        elif self.state == "COMBAT_HUB":
+            # 更新切换和开始按钮
+            self.prev_btn.update(mouse_pos)
+            self.next_btn.update(mouse_pos)
+            self.start_btn.update(mouse_pos)
+            self.back_btn.update(mouse_pos)
+
+            if clicked:
+                if self.prev_btn.is_hovered:
+                    self.char_index = (self.char_index - 1) % len(self.char_list)
+                    pygame.time.delay(150)
+                elif self.next_btn.is_hovered:
+                    self.char_index = (self.char_index + 1) % len(self.char_list)
+                    pygame.time.delay(150)
+                elif self.start_btn.is_hovered:
+                    # 关键点：将当前选中的角色配置传给 CombatScene
+                    selected_char = self.char_list[self.char_index]
+                    self.engine.switch_scene("COMBAT", selected_char)
+                elif self.back_btn.is_hovered:
+                    self.state = "MAIN"
+                    pygame.time.delay(150)
+
+        elif self.state != "MAIN":
+            self.back_btn.update(mouse_pos)
+            if clicked and self.back_btn.is_hovered:
+                self.state = "MAIN"
+                pygame.time.delay(150)
+
+    def draw(self):
+        self.screen.fill((5, 5, 10))
+        self._draw_background_fx()
+
+        if self.state == "MAIN":
+            self._draw_main_menu()
+        elif self.state == "COMBAT_HUB":
+            self._draw_combat_hub()
+        elif self.state == "UPGRADES":
+            self._draw_meta_upgrades()
+        elif self.state == "SETTINGS":
+            self._draw_settings()
+
+        if self.state != "MAIN": self.back_btn.draw(self.screen)
+
+    def _draw_background_fx(self):
+        for x in range(0, WIDTH, 50): pygame.draw.line(self.screen, (15, 15, 30), (x, 0), (x, HEIGHT))
+        for y in range(0, HEIGHT, 50): pygame.draw.line(self.screen, (15, 15, 30), (0, y), (WIDTH, y))
+
+    def _draw_main_menu(self):
+        title = self.font_title.render("CYBER SURVIVOR", True, (0, 255, 240))
+        self.screen.blit(title, (100, 100))
+        pygame.draw.line(self.screen, (255, 0, 255), (100, 200), (600, 200), 3)
+        for btn in self.main_btns.values(): btn.draw(self.screen)
+
+    def _draw_combat_hub(self):
+        # 核心逻辑：获取当前指向的角色数据
+        if not self.char_list: return  # 防止配置丢失报错
+        char = self.char_list[self.char_index]
+
+        # 标题
+        txt = self.font_sub.render(f"--- 逻辑体部署: {char['name']} ---", True, (0, 255, 240))
+        self.screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 80))
+
+        # 1. 角色预览区 (资产接口预留)
+        preview_rect = pygame.Rect(WIDTH // 2 - 150, 150, 300, 300)
+        pygame.draw.rect(self.screen, (20, 20, 40), preview_rect, border_radius=15)
+        # TODO: 在此加载贴图 if char['id'] in assets: screen.blit(...)
+        # 目前使用颜色占位，重金属和幽灵显示不同颜色
+        placeholder_color = (0, 255, 240) if "ghost" in char['id'] else (255, 50, 80)
+        pygame.draw.circle(self.screen, placeholder_color, preview_rect.center, 60)
+
+        # 2. 角色描述
+        desc_txt = self.font_info.render(char['desc'], True, (200, 200, 200))
+        self.screen.blit(desc_txt, (WIDTH // 2 - desc_txt.get_width() // 2, 470))
+
+        # 3. 初始武器提示
+        weapon_hint = self.font_info.render(f"初始协议: {char.get('starting_weapon', 'N/A')}", True, (255, 255, 0))
+        self.screen.blit(weapon_hint, (WIDTH // 2 - weapon_hint.get_width() // 2, 500))
+
+        # 4. 绘制交互按钮
+        self.prev_btn.draw(self.screen)
+        self.next_btn.draw(self.screen)
+        self.start_btn.draw(self.screen)
+
+    def _draw_meta_upgrades(self):
+        txt = self.font_sub.render("--- 神经回路增强 ---", True, (255, 0, 255))
+        self.screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 100))
+        y_offset = 200
+        for stat, val in save_manager.data["meta_upgrades"].items():
+            stat_txt = self.font_info.render(f"{stat.upper()} 加成层级: {val}", True, (200, 200, 200))
+            self.screen.blit(stat_txt, (WIDTH // 2 - 100, y_offset))
+            y_offset += 50
+
+    def _draw_settings(self):
+        txt = self.font_sub.render("--- 核心协议配置 ---", True, (200, 200, 200))
+        self.screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 100))
+==============================
+FILE: systems\__init__.py
+==============================
+
+==============================
+FILE: ui\components.py
+==============================
+# ui/components.py
+import pygame
+
+
+class CyberButton:
+    """赛博风格发光按钮"""
+
+    def __init__(self, text, pos, size, font, color=(0, 255, 240)):
+        self.text = text
+        self.rect = pygame.Rect(pos, size)
+        self.font = font
+        self.base_color = pygame.Color(*color)
+        self.is_hovered = False
+        self.glow_anim = 0.0  # 动画进度
+
+    def update(self, mouse_pos):
+        self.is_hovered = self.rect.collidepoint(mouse_pos)
+        # 呼吸灯逻辑：悬停时发光增强
+        if self.is_hovered:
+            self.glow_anim = min(1.0, self.glow_anim + 0.1)
+        else:
+            self.glow_anim = max(0.0, self.glow_anim - 0.05)
+
+    def draw(self, surface):
+        # 1. 绘制外发光底色
+        if self.glow_anim > 0:
+            # 这里的 inflate 稍微扩大一点矩形作为发光范围
+            glow_rect = self.rect.inflate(int(self.glow_anim * 12), int(self.glow_anim * 12))
+            glow_color = (*self.base_color[:3], int(self.glow_anim * 50))
+            glow_surf = pygame.Surface(glow_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(glow_surf, glow_color, glow_surf.get_rect(), border_radius=8)
+            surface.blit(glow_surf, glow_rect.topleft)
+
+        # 2. 绘制主边框
+        current_color = self.base_color if self.is_hovered else self.base_color.lerp((0, 0, 0, 255), 0.5)
+        pygame.draw.rect(surface, current_color, self.rect, 2, border_radius=4)
+
+        # 3. 核心修复：绘制四个装饰角 (使用 Vector2 避免元组拼接错误)
+        l = 10  # 角线长度
+        tl = pygame.Vector2(self.rect.topleft)
+        tr = pygame.Vector2(self.rect.topright)
+        bl = pygame.Vector2(self.rect.bottomleft)
+        br = pygame.Vector2(self.rect.bottomright)
+
+        # 左上角
+        pygame.draw.lines(surface, self.base_color, False, [tl + (0, l), tl, tl + (l, 0)], 3)
+        # 右下角
+        pygame.draw.lines(surface, self.base_color, False, [br - (0, l), br, br - (l, 0)], 3)
+
+        # 4. 文字绘制
+        t_surf = self.font.render(self.text, True, current_color)
+        t_rect = t_surf.get_rect(center=self.rect.center)
+        surface.blit(t_surf, t_rect)
+==============================
+FILE: ui\ui_manager.py
+==============================
+# ui/ui_manager.py (全量替换)
+import pygame
+import random
+from core.constants import *
+
+
+class UIManager:
+    def __init__(self, engine):
+        self.engine = engine
+        self.display_surface = pygame.display.get_surface()
+        self.floating_texts = []
+        self.menus = {}
+
+    def add_menu(self, name, instance):
+        self.menus[name] = instance
+
+    def spawn_damage_text(self, pos, amount):
+        font = pygame.font.SysFont("arial", 24, bold=True)
+        txt_surf = font.render(str(int(amount)), True, (255, 255, 255))
+
+        self.floating_texts.append({
+            'pos': pygame.Vector2(pos),
+            'surf': txt_surf,
+            'life': 1.0,
+            'vel': pygame.Vector2(random.uniform(-30, 30), -60)
+        })
+
+    def update(self, dt):
+        for text in self.floating_texts[:]:
+            text['pos'] += text['vel'] * dt
+            text['life'] -= dt
+            if text['life'] <= 0:
+                self.floating_texts.remove(text)
+
+    def draw(self, score):
+        # 1. 只有在战斗场景时才画伤害数字
+        # 通过检查当前 scene 是否有 'all_sprites' 属性来判定
+        if hasattr(self.engine.scene, 'all_sprites'):
+            self._draw_floating_texts()
+
+        # 2. 渲染常驻 HUD (HUD 内部已有安全判定)
+        if 'hud' in self.menus:
+            self.menus['hud'].draw(score)
+
+        # 3. 渲染升级面板
+        if self.engine.state == "UPGRADING" and 'upgrade' in self.menus:
+            self.menus['upgrade'].draw()
+
+    def _draw_floating_texts(self):
+        # 核心修复点：从当前 scene 获取 all_sprites 的 offset
+        offset = self.engine.scene.all_sprites.offset
+        for text in self.floating_texts:
+            alpha = int(text['life'] * 255)
+            text['surf'].set_alpha(alpha)
+            render_pos = text['pos'] - offset
+            self.display_surface.blit(text['surf'], render_pos)
+==============================
+FILE: ui\__init__.py
+==============================
+
+==============================
+FILE: ui\menus\hud.py
+==============================
+# ui/menus/hud.py (全量替换)
+import pygame
+from core.constants import *
+
+
+class HUD:
+    def __init__(self, player):
+        self.player = player
+        self.display_surface = pygame.display.get_surface()
+        self.font = pygame.font.SysFont("consolas", 20, bold=True)
+
+        self.smooth_hp = player.current_hp
+        self.smooth_xp = player.current_xp
+
+    def draw(self, score):
+        # 如果当前没有真正的玩家对象（比如在 dummy 阶段），直接跳过
+        if not hasattr(self.player, 'stats'): return
+
+        self.smooth_hp += (self.player.current_hp - self.smooth_hp) * 0.1
+        self.smooth_xp += (self.player.current_xp - self.smooth_xp) * 0.1
+
+        self._draw_hp_bar()
+        self._draw_xp_bar()
+        self._draw_stats(score)
+        self._draw_weapon_icons()
+
+    def _draw_hp_bar(self):
+        x, y, w, h = 30, 40, 250, 14
+        pygame.draw.rect(self.display_surface, (40, 40, 50), (x, y, w, h), border_radius=4)
+        max_hp = self.player.stats.max_health.value
+        if max_hp > 0:
+            fill_w = w * (max(0, self.smooth_hp) / max_hp)
+            pygame.draw.rect(self.display_surface, (255, 50, 80), (x, y, fill_w, h), border_radius=4)
+        pygame.draw.rect(self.display_surface, (200, 200, 210), (x, y, w, h), 2, border_radius=4)
+
+    def _draw_xp_bar(self):
+        xp_ratio = self.smooth_xp / self.player.xp_required
+        pygame.draw.rect(self.display_surface, (20, 20, 30), (0, HEIGHT - 10, WIDTH, 10))
+        pygame.draw.rect(self.display_surface, (0, 255, 200), (0, HEIGHT - 10, WIDTH * xp_ratio, 10))
+
+    def _draw_stats(self, score):
+        info_str = f"SCORE: {score:06d} | LVL: {self.player.level}"
+        info_surf = self.font.render(info_str, True, (0, 255, 240))
+        self.display_surface.blit(info_surf, (WIDTH - 280, 30))
+
+        now_ms = pygame.time.get_ticks() // 1000
+        time_str = f"{now_ms // 60:02d}:{now_ms % 60:02d}"
+        t_surf = self.font.render(time_str, True, (255, 255, 255))
+        self.display_surface.blit(t_surf, (WIDTH // 2 - t_surf.get_width() // 2, 20))
+
+    def _draw_weapon_icons(self):
+        """核心修复点：适配场景化架构"""
+        start_x, y, size = 30, 75, 30
+
+        # 1. 先检查 engine 是否有活跃场景
+        scene = getattr(self.player.engine, 'scene', None)
+        # 2. 检查场景是否是战斗场景（即是否有 weapon_manager）
+        weapon_manager = getattr(scene, 'weapon_manager', None)
+
+        if not weapon_manager:
+            return
+
+        owned_weapons = list(weapon_manager.weapons.values())
+        for i in range(6):
+            rect = pygame.Rect(start_x + i * (size + 8), y, size, size)
+            pygame.draw.rect(self.display_surface, (30, 30, 40), rect, border_radius=4)
+            if i < len(owned_weapons):
+                pygame.draw.rect(self.display_surface, (0, 255, 240, 100), rect, 2, border_radius=4)
+                lvl_txt = self.font.render(str(owned_weapons[i].level), True, (255, 255, 255))
+                self.display_surface.blit(lvl_txt, (rect.x + 8, rect.y + 4))
+==============================
+FILE: ui\menus\upgrade_panel.py
+==============================
+# ui/menus/upgrade_panel.py (全量替换)
+import pygame
+import random
+from core.constants import *
+from core.registry import registry
+from core.event_bus import bus
+
+class UpgradePanel:
+    def __init__(self, player):
+        self.player = player
+        self.display_surface = pygame.display.get_surface()
+
+        # 加载支持中文的字体
+        self.font_title = self._get_font(28)
+        self.font_desc = self._get_font(18)
+        self.font_button = self._get_font(22)
+
+        self.visible = False
+        self.options = []
+        self.show_time = 0
+        self.input_delay = 500
+
+        self.reroll_count = 1
+        self.reroll_rect = pygame.Rect(WIDTH // 2 - 60, HEIGHT - 100, 120, 45)
+
+    @staticmethod
+    def _get_font(size):
+        for f in ['microsoftyahei', 'simhei', 'arial']:
+            font = pygame.font.SysFont(f, size, bold=True)
+            if font.size("测试")[0] > 0: return font
+        return pygame.font.SysFont(None, size)
+
+    def show(self):
+        self._generate_options()
+        self.visible = True
+        self.show_time = pygame.time.get_ticks()
+
+    def _generate_options(self):
+        """核心修复点：通过当前场景获取武器管理器"""
+        pool = []
+        # 1. 属性池 (从 Registry 加载)
+        for item in registry.upgrades:
+            pool.append({"type": "stat", "name": item['name'], "desc": item['desc'], "raw_data": item})
+
+        # 2. 武器池 (修复：去当前活跃场景 scene 找 weapon_manager)
+        scene = self.player.engine.scene
+        if hasattr(scene, 'weapon_manager'):
+            weapon_cands = scene.weapon_manager.get_upgrade_candidates()
+            for cand in weapon_cands:
+                w_name = registry.weapons[cand['id']]['name']
+                w_desc = "新武器获得" if cand['type'] == 'weapon_new' else f"升级至 LV.{cand['level']}"
+                pool.append({"type": cand['type'], "name": w_name, "desc": w_desc, "raw_data": cand})
+
+        # 随机抽取 3 个
+        count = min(3, len(pool))
+        self.options = random.sample(pool, count)
+
+    def reroll(self):
+        if self.reroll_count > 0:
+            self.reroll_count -= 1
+            self._generate_options()
+            self.show_time = pygame.time.get_ticks()
+
+    def draw(self):
+        if not self.visible: return
+        now = pygame.time.get_ticks()
+        mouse_pos = pygame.mouse.get_pos()
+        clicked = pygame.mouse.get_pressed()[0]
+
+        # 蒙版半透明背景
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 210))
+        self.display_surface.blit(overlay, (0, 0))
+
+        # 绘制卡片
+        card_w, card_h = 280, 380
+        start_x = (WIDTH - (card_w * len(self.options) + 40 * (len(self.options) - 1))) // 2
+
+        for i, opt in enumerate(self.options):
+            rect = pygame.Rect(start_x + i * (card_w + 40), (HEIGHT - card_h) // 2, card_w, card_h)
+            is_hover = rect.collidepoint(mouse_pos)
+
+            color = (70, 75, 100) if is_hover else (45, 48, 62)
+            pygame.draw.rect(self.display_surface, color, rect, border_radius=15)
+            pygame.draw.rect(self.display_surface, (0, 255, 240) if is_hover else (80, 80, 100), rect, 3, border_radius=15)
+
+            # 文字
+            t_surf = self.font_title.render(opt['name'], True, (255, 255, 255))
+            d_surf = self.font_desc.render(opt['desc'], True, (200, 200, 200))
+            self.display_surface.blit(t_surf, (rect.x + 20, rect.y + 40))
+            self.display_surface.blit(d_surf, (rect.x + 20, rect.y + 100))
+
+            if is_hover and clicked and (now - self.show_time > self.input_delay):
+                self.apply_upgrade(opt)
+                break
+
+        # 刷新按钮
+        if self.reroll_count > 0:
+            btn_color = (0, 200, 150) if self.reroll_rect.collidepoint(mouse_pos) else (0, 120, 100)
+            pygame.draw.rect(self.display_surface, btn_color, self.reroll_rect, border_radius=10)
+            btn_txt = self.font_button.render(f"刷新 ({self.reroll_count})", True, (255, 255, 255))
+            self.display_surface.blit(btn_txt, (self.reroll_rect.centerx - btn_txt.get_width() // 2,
+                                                self.reroll_rect.centery - btn_txt.get_height() // 2))
+            if self.reroll_rect.collidepoint(mouse_pos) and clicked and (now - self.show_time > self.input_delay):
+                self.reroll()
+
+    def apply_upgrade(self, opt):
+        """核心修复点：通过场景执行升级"""
+        raw = opt['raw_data']
+        if opt['type'] == 'stat':
+            self.player.stats.add_modifier(raw['stat'], raw['value'])
+            if raw['stat'] in ["health", "max_health"]:
+                self.player.current_hp = self.player.stats.max_health.value
+        else:
+            # 升级或获取武器：同样去当前场景 scene 找 weapon_manager
+            scene = self.player.engine.scene
+            if hasattr(scene, 'weapon_manager'):
+                scene.weapon_manager.add_or_upgrade_weapon(raw['id'])
+
+        self.visible = False
+        bus.emit("RESUME_GAME")
+==============================
+FILE: ui\menus\__init__.py
+==============================
+
+==============================
+FILE: combat\combat_utils.py
+==============================
+import pygame
+
+
+class CombatUtils:
+    @staticmethod
+    def get_nearest_enemy(origin_pos, enemy_group):
+        """在指定的敌人组中寻找距离原点最近的敌人"""
+        nearest_enemy = None
+        min_dist = float('inf')
+
+        for enemy in enemy_group:
+            # 计算向量距离
+            dist = origin_pos.distance_to(enemy.pos)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_enemy = enemy
+
+        return nearest_enemy
+==============================
+FILE: combat\damage_system.py
+==============================
+import pygame
+
+
+class DamageSystem:
+    @staticmethod
+    def handle_collision(bullet, enemy):
+        # 1. 基础伤害计算（未来可以在这里加入暴击判定）
+        damage = bullet.damage
+
+        # 2. 敌人扣血
+        is_dead = enemy.take_damage(damage)
+
+        # 3. 子弹处理（目前简单处理为命中消失）
+        bullet.kill()
+
+        return is_dead
+==============================
+FILE: combat\weapon_factory.py
+==============================
+import importlib
+import os
+from core.registry import registry
+
+
+class WeaponFactory:
+    @classmethod
+    def auto_discover_logic(cls):
+        """扫描 weapons 文件夹并动态加载模块以触发装饰器"""
+        path = "combat/weapons"
+        if not os.path.exists(path): return
+
+        for filename in os.listdir(path):
+            if filename.endswith(".py") and filename not in ["__init__.py", "base_weapon.py"]:
+                module_name = f"combat.weapons.{filename[:-3]}"
+                # 动态加载会执行模块代码，从而触发 @registry.register_logic
+                importlib.import_module(module_name)
+
+        print(f"🛠️ 武器工厂：逻辑自动发现完成 -> {list(registry.weapon_logic.keys())}")
+
+    @classmethod
+    def create_weapon(cls, weapon_id, player, groups):
+        config = registry.weapons.get(weapon_id)
+        if not config:
+            print(f"⚠️ 找不到武器配置: {weapon_id}");
+            return None
+
+        logic_id = config.get("logic_type")
+        logic_class = registry.weapon_logic.get(logic_id)
+
+        if logic_class:
+            return logic_class(player, groups, config)
+
+        print(f"❌ 找不到逻辑实现: {logic_id}")
+        return None
+==============================
+FILE: combat\weapon_manager.py
+==============================
+import pygame
+from combat.weapon_factory import WeaponFactory
+
+class WeaponManager:
+    """
+    工业级武器管理器：
+    1. 负责 6 个武器插槽的生命周期管理。
+    2. 协调 WeaponFactory 生成不同逻辑类型的武器（弹道类 vs 挂载类）。
+    3. 提供升级候选列表供 UI 系统调用。
+    """
+    def __init__(self, player, enemy_group, projectile_groups):
+        self.player = player
+        self.enemy_group = enemy_group
+        self.projectile_groups = projectile_groups
+        self.max_slots = 6
+        self.weapons = {}  # 格式：{ 'weapon_id': weapon_instance }
+
+    def add_or_upgrade_weapon(self, weapon_id):
+        """核心业务逻辑：自动判定是升级现有武器还是占用新槽位"""
+        # 1. 检查是否已经持有该武器
+        if weapon_id in self.weapons:
+            self.weapons[weapon_id].level_up()
+            return True
+
+        # 2. 检查插槽是否已满
+        if len(self.weapons) < self.max_slots:
+            # 调用工厂创建实例，传入 player、显示/物理组、以及配置
+            new_weapon = WeaponFactory.create_weapon(weapon_id, self.player, self.projectile_groups)
+            if new_weapon:
+                self.weapons[weapon_id] = new_weapon
+                print(f"✅ 已装配新武器逻辑: {weapon_id}")
+                return True
+        else:
+            print(f"🚫 武器插槽已满({self.max_slots})，无法学习新武器: {weapon_id}")
+        return False
+
+    def get_upgrade_candidates(self):
+        """
+        为 UpgradePanel 提供可选列表。
+        包含：未满级的已有武器 + 库中未获取的新武器。
+        """
+        from core.registry import registry
+        candidates = []
+
+        # 候选项 A: 已有武器的升级 (Level Up)
+        for w_id, w_inst in self.weapons.items():
+            if w_inst.level < w_inst.max_level:
+                candidates.append({
+                    "type": "weapon_upgrade", 
+                    "id": w_id, 
+                    "level": w_inst.level + 1
+                })
+
+        # 候选项 B: 库中尚未获取的新武器 (New Weapon)
+        if len(self.weapons) < self.max_slots:
+            for w_id in registry.weapons.keys():
+                if w_id not in self.weapons:
+                    candidates.append({
+                        "type": "weapon_new", 
+                        "id": w_id
+                    })
+
+        return candidates
+
+    def update(self, dt):
+        """驱动所有已装备武器的逻辑（如：开火判定、光环判定）"""
+        for weapon in list(self.weapons.values()):
+            weapon.update(dt, self.enemy_group)
+
+    def draw_weapons(self, screen, camera_offset):
+        """
+        【新增功能】
+        解决非弹道类武器（如赛博光环、磁场）不可见的问题。
+        这些武器不是独立的 Sprite，因此需要手动触发它们的绘制逻辑。
+        """
+        for weapon in self.weapons.values():
+            # 如果武器类实现了 draw_custom 方法，则进行绘制
+            if hasattr(weapon, 'draw_custom'):
+                weapon.draw_custom(screen, camera_offset)
+
+    # --- 工业级兼容性维护 ---
+    def add_weapon(self, weapon_instance_or_id):
+        """
+        保留旧接口兼容性。
+        如果传入的是 ID 字符串，自动转入 add_or_upgrade 流程。
+        """
+        if isinstance(weapon_instance_or_id, str):
+            self.add_or_upgrade_weapon(weapon_instance_or_id)
+        else:
+            # 兼容手动创建实例并直接添加的情况
+            w_id = getattr(weapon_instance_or_id, 'id', None)
+            if w_id:
+                self.weapons[w_id] = weapon_instance_or_id
+==============================
+FILE: combat\projectiles\bullet.py
+==============================
+import pygame
+from entities.base_entity import BaseEntity
+from core.constants import *
+
+
+class Bullet(BaseEntity):
+    def __init__(self, pos, direction, groups, damage):
+        super().__init__(pos, groups, LAYER_PROJECTILE)
+        # 工业化：缓存 Surface 防止重复创建
+        self.image = pygame.Surface((12, 6), pygame.SRCALPHA)
+        pygame.draw.rect(self.image, (0, 255, 255), (0, 0, 12, 6), border_radius=2)
+
+        # 配合飞行方向旋转子弹贴图
+        angle = direction.angle_to(pygame.math.Vector2(1, 0))
+        self.image = pygame.transform.rotate(self.image, angle)
+
+        self.rect = self.image.get_rect(center=pos)
+        self.pos = pygame.math.Vector2(pos)
+        self.direction = direction
+        self.speed = 1000
+        self.damage = damage
+        self.spawn_time = pygame.time.get_ticks()
+
+    def update(self, dt):
+        self.pos += self.direction * self.speed * dt
+        self.rect.center = (round(self.pos.x), round(self.pos.y))
+        if pygame.time.get_ticks() - self.spawn_time > 1500:
+            self.kill()
+==============================
+FILE: combat\projectiles\__init__.py
+==============================
+
+==============================
+FILE: combat\weapons\base_weapon.py
+==============================
+import pygame
+
+class BaseWeapon:
+    """所有武器必须遵守的工业协议"""
+    def __init__(self, player, groups, config):
+        self.player = player
+        self.groups = groups
+        self.config = config
+        self.id = config['id']
+        self.level = 1
+        self.max_level = config.get('max_level', 5)
+        self.last_shot = 0
+        self.init_stats()
+
+    def init_stats(self):
+        """解析 JSON 中的等级数据"""
+        lvl_key = str(self.level)
+        lvl_data = self.config.get('levels', {}).get(lvl_key, {})
+        self.damage = lvl_data.get('damage', 10)
+        self.cooldown = lvl_data.get('cooldown', 500)
+        self.bullet_count = lvl_data.get('count', 1)
+
+    def level_up(self):
+        if self.level < self.max_level:
+            self.level += 1
+            self.init_stats()
+            print(f"🔝 {self.config['name']} 升级 -> LV.{self.level}")
+
+    def update(self, dt, enemies):
+        pass # 由子类重写
+==============================
+FILE: combat\weapons\cyber_aura.py
+==============================
+import pygame
+from core.registry import registry
+from combat.weapons.base_weapon import BaseWeapon
+
+@registry.register_logic("cyber_aura")
+class CyberAuraWeapon(BaseWeapon):
+    def __init__(self, player, groups, config):
+        super().__init__(player, groups, config)
+        self.tick_timer = 0
+        self.aura_surface = None
+        self._update_visuals()
+
+    def init_stats(self):
+        """从 JSON 等级表更新属性"""
+        super().init_stats() # 调用基类读取 level_data
+        lvl_data = self.config['levels'].get(str(self.level), {})
+        self.radius = lvl_data.get('radius', 150)
+        self.tick_rate = lvl_data.get('tick_rate', 0.5)
+        # 联动 StatsComponent 的伤害倍率
+        self.final_damage = self.damage * self.player.stats.damage_mult.value
+        self._update_visuals()
+
+    def _update_visuals(self):
+        """根据半径预渲染光环，节省每一帧的绘图开销"""
+        size = self.radius * 2
+        self.aura_surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        # 赛博蓝渐变
+        pygame.draw.circle(self.aura_surface, (0, 255, 240, 40), (self.radius, self.radius), self.radius)
+        pygame.draw.circle(self.aura_surface, (0, 255, 240, 160), (self.radius, self.radius), self.radius, 2)
+
+    def update(self, dt, enemies):
+        # 定时器判定伤害触发
+        self.tick_timer += dt
+        if self.tick_timer >= self.tick_rate:
+            self._apply_aoe(enemies)
+            self.tick_timer = 0
+
+    def _apply_aoe(self, enemies):
+        # 获取玩家中心点
+        p_pos = self.player.pos
+        # 判定范围内所有敌人
+        for enemy in enemies:
+            if p_pos.distance_to(enemy.pos) <= self.radius:
+                # 造成伤害并触发击退（如果需要）
+                enemy.take_damage(self.final_damage)
+
+    def draw_custom(self, screen, offset):
+        """如果需要独立绘制特效，可由 CameraGroup 调用"""
+        if self.aura_surface:
+            render_pos = self.player.rect.center - offset
+            rect = self.aura_surface.get_frect(center=render_pos)
+            screen.blit(self.aura_surface, rect)
+==============================
+FILE: combat\weapons\orbital.py
+==============================
+import pygame
+import math
+from core.registry import registry
+from combat.weapons.base_weapon import BaseWeapon
+
+
+@registry.register_logic("orbital")  # <--- 补上这一句
+class OrbitalWeapon(BaseWeapon):
+    def __init__(self, player, groups, config):
+        super().__init__(player, groups, config)
+        self.angle = 0
+        self.radius = 120
+        # 视觉：创建一个常驻光环 Surface
+        self.image = pygame.Surface((40, 40), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, (0, 255, 255, 100), (20, 20), 20, 3)
+
+    def update(self, dt, enemies):
+        self.angle += 5 * dt
+        # 环绕逻辑
+        offset = pygame.math.Vector2(math.cos(self.angle), math.sin(self.angle)) * self.radius
+        current_pos = self.player.pos + offset
+
+        # 简易碰撞：光环范围内敌人受伤
+        for enemy in enemies:
+            if current_pos.distance_to(enemy.pos) < 30:
+                enemy.take_damage(self.damage * dt * 5)
+
+    def draw_custom(self, screen, offset):
+        """如果想让环绕武器也有特殊特效绘制，可以在这里写逻辑"""
+        pass
+==============================
+FILE: combat\weapons\projectile.py
+==============================
+import pygame
+from core.registry import registry
+from combat.weapons.base_weapon import BaseWeapon
+from combat.projectiles.bullet import Bullet
+from combat.combat_utils import CombatUtils
+
+@registry.register_logic("projectile")  # <--- 补上这一句
+class ProjectileWeapon(BaseWeapon):
+    def update(self, dt, enemies):
+        now = pygame.time.get_ticks()
+        # 自动读取 Player 的冷却缩减属性
+        cdr = getattr(self.player.stats, 'cooldown_reduction', None)
+        reduction = cdr.value if cdr else 0
+
+        if now - self.last_shot >= self.cooldown * (1 - reduction):
+            target = CombatUtils.get_nearest_enemy(self.player.pos, enemies)
+            if target:
+                self.fire(target)
+                self.last_shot = now
+
+    def fire(self, target):
+        direction = (target.pos - self.player.pos).normalize()
+        for i in range(self.bullet_count):
+            angle_offset = (i - (self.bullet_count - 1) / 2) * 10
+            # 这里 groups 已经在 BaseWeapon.__init__ 中保存为 self.groups
+            Bullet(self.player.pos, direction.rotate(angle_offset), self.groups, self.damage)
+==============================
+FILE: combat\weapons\__init__.py
+==============================
+
+==============================
+FILE: entities\base_entity.py
+==============================
+import pygame
+from core.constants import *
+
+class BaseEntity(pygame.sprite.Sprite):
+    def __init__(self, pos, groups, layer=LAYER_BG):
+        super().__init__(groups)
+        self.z_index = layer
+        self.pos = pygame.math.Vector2(pos)
+        self.image = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(center=pos)
+
+    def update(self, dt):
+        pass
+==============================
+FILE: entities\player.py
+==============================
+import pygame
+from entities.base_entity import BaseEntity
+from entities.components.stats import StatsComponent
+from core.constants import *
+
+
+class Player(BaseEntity):
+    def __init__(self, pos, groups, engine):  # 增加 engine 参数
+        super().__init__(pos, groups, LAYER_PLAYER)
+        self.engine = engine  # 关键：保存引擎引用
+        self.stats = StatsComponent({})
+
+        self.image = pygame.Surface((40, 40), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, COLOR_PLAYER, (20, 20), 20)
+        self.rect = self.image.get_rect(center=pos)
+        self.pos = pygame.math.Vector2(self.rect.center)
+
+        self.current_hp = self.stats.max_health.value
+        self.current_xp = 0
+        self.xp_required = 100
+        self.level = 1
+        self.vulnerable = True
+        self.hurt_time = 0
+
+    def take_damage(self, amount):
+        if self.vulnerable:
+            self.current_hp -= amount
+            self.vulnerable = False
+            self.hurt_time = pygame.time.get_ticks()
+
+    def gain_xp(self, amount):
+        self.current_xp += amount
+
+    def perform_level_up(self):
+        self.level += 1
+        self.current_xp -= self.xp_required
+        self.xp_required = int(self.xp_required * 1.3)
+        self.current_hp = self.stats.max_health.value
+
+    def update(self, dt):
+        keys = pygame.key.get_pressed()
+        direction = pygame.math.Vector2(
+            (keys[pygame.K_d] or keys[pygame.K_RIGHT]) - (keys[pygame.K_a] or keys[pygame.K_LEFT]),
+            (keys[pygame.K_s] or keys[pygame.K_DOWN]) - (keys[pygame.K_w] or keys[pygame.K_UP])
+        )
+        if direction.length() > 0: direction = direction.normalize()
+        self.pos += direction * self.stats.move_speed.value * dt
+        self.rect.center = (round(self.pos.x), round(self.pos.y))
+
+        if not self.vulnerable:
+            if pygame.time.get_ticks() - self.hurt_time >= 500:
+                self.vulnerable = True
+==============================
+FILE: entities\components\stats.py
+==============================
+class Stat:
+    """属性容器：支持基础值、加法加成、百分比加成"""
+
+    def __init__(self, base_value):
+        self.base_value = base_value
+        self.flat_modifier = 0
+        self.percent_modifier = 0
+
+    @property
+    def value(self):
+        # 工业标准公式：最终值 = (基础 + 固定加成) * (1 + 百分比加成)
+        return (self.base_value + self.flat_modifier) * (1 + self.percent_modifier)
+
+
+class StatsComponent:
+    def __init__(self, config):
+        # 基础属性
+        self.health = Stat(config.get('health', 100))
+        self.max_health = Stat(config.get('health', 100))
+        self.move_speed = Stat(config.get('move_speed', 350))
+
+        # 战斗属性（冗余设计：哪怕现在不用，也先预留位置）
+        self.damage_mult = Stat(1.0)  # 伤害倍率
+        self.attack_area = Stat(1.0)  # 攻击范围倍率
+        self.cooldown_reduction = Stat(0.0)  # 冷却缩减
+        self.crit_rate = Stat(0.05)  # 暴击率
+        self.crit_dmg = Stat(1.5)  # 暴击伤害
+
+        # 实用属性
+        self.pickup_range = Stat(120)  # 磁吸范围
+        self.luck = Stat(1.0)  # 幸运
+        self.exp_gain = Stat(1.0)  # 经验获取率
+
+    def add_modifier(self, stat_name, val, is_percent=True):
+        """为特定属性添加加成"""
+        stat = getattr(self, stat_name, None)
+        if stat:
+            if is_percent:
+                stat.percent_modifier += val
+            else:
+                stat.flat_modifier += val
+==============================
+FILE: entities\components\__init__.py
+==============================
+
+==============================
+FILE: entities\enemies\base_enemy.py
+==============================
+import pygame
+import random
+from entities.base_entity import BaseEntity
+from entities.components.stats import StatsComponent
+from core.constants import *
+
+
+class Enemy(BaseEntity):
+    def __init__(self, pos, groups, config, player):
+        super().__init__(pos, groups, LAYER_ENEMY)
+        self.player = player
+        self.config = config
+
+        # 挂载属性组件
+        self.stats = StatsComponent(config)
+        self.hp = self.stats.health.value
+
+        # 视觉
+        self.image = pygame.Surface((30, 30), pygame.SRCALPHA)
+        pygame.draw.rect(self.image, COLOR_ENEMY, (0, 0, 30, 30), border_radius=4)
+        self.rect = self.image.get_rect(center=pos)
+
+    def update(self, dt):
+        # 基础追击逻辑
+        direction = self.player.pos - self.pos
+        if direction.length() > 0:
+            direction = direction.normalize()
+
+        self.pos += direction * self.stats.move_speed.value * dt
+        self.rect.center = (round(self.pos.x), round(self.pos.y))
+
+    def take_damage(self, amount):
+        self.hp -= amount
+        if self.hp <= 0:
+            self.kill()
+            return True  # 返回死亡信号
+        return False
+==============================
+FILE: entities\enemies\__init__.py
+==============================
+
+==============================
+FILE: entities\pickups\exp_gem.py
+==============================
+import pygame
+from entities.base_entity import BaseEntity
+from core.constants import *
+
+
+class ExperienceGem(BaseEntity):
+    def __init__(self, pos, groups, player):
+        super().__init__(pos, groups, LAYER_PICKUP)
+        self.player = player
+        self.image = pygame.Surface((16, 16), pygame.SRCALPHA)
+        pygame.draw.polygon(self.image, (50, 255, 50), [(8, 0), (16, 8), (8, 16), (0, 8)])
+        self.rect = self.image.get_rect(center=pos)
+        self.pos = pygame.math.Vector2(pos)
+
+        self.xp_value = 20
+        self.speed = 0
+        self.is_magnetized = False
+
+    def update(self, dt):
+        dist_vec = self.player.pos - self.pos
+        distance = dist_vec.length()
+
+        if distance < self.player.stats.pickup_range.value:
+            self.is_magnetized = True
+
+        if self.is_magnetized:
+            self.speed += 40
+            if distance > 0:
+                self.pos += dist_vec.normalize() * self.speed * dt
+
+        self.rect.center = (round(self.pos.x), round(self.pos.y))
+==============================
+FILE: entities\pickups\__init__.py
+==============================
+
+==============================
+FILE: data\configs\characters.json
+==============================
+{
+    "cypher_ghost": {
+        "id": "cypher_ghost",
+        "name": "赛博幽灵",
+        "desc": "高机动性，擅长远程袭扰。",
+        "starting_weapon": "starter_gun",
+        "base_stats": {
+            "health": 80,
+            "move_speed": 450,
+            "damage_mult": 0.2
+        }
+    },
+    "heavy_metal": {
+        "id": "heavy_metal",
+        "name": "重金属",
+        "desc": "装甲厚重，自带防御性光环。",
+        "starting_weapon": "cyber_aura",
+        "base_stats": {
+            "health": 200,
+            "move_speed": 280,
+            "damage_mult": 0.0
+        }
+    }
+}
+==============================
+FILE: data\configs\upgrades.json
+==============================
+[
+    {"id": "speed_up", "name": "神经加速", "desc": "移动速度 +15%", "stat": "move_speed", "value": 0.15},
+    {"id": "atk_up", "name": "强力模组", "desc": "攻击力 +20%", "stat": "damage_mult", "value": 0.2},
+    {"id": "pickup_up", "name": "磁力扩容", "desc": "拾取范围 +40%", "stat": "pickup_range", "value": 0.4},
+    {"id": "hp_up", "name": "纳米装甲", "desc": "最大血量 +20%", "stat": "max_health", "value": 0.2}
+]
+==============================
+FILE: data\configs\enemies\basic_grunt.json
+==============================
+{
+    "id": "basic_grunt",
+    "name": "赛博新兵",
+    "health": 30,
+    "move_speed": 180,
+    "score_value": 10,
+    "logic_type": "chaser"
+}
+==============================
+FILE: data\configs\weapons\cyber_aura.json
+==============================
+{
+    "id": "cyber_aura",
+    "name": "赛博光环",
+    "logic_type": "cyber_aura",
+    "max_level": 5,
+    "levels": {
+        "1": {"damage": 12, "radius": 140, "tick_rate": 0.5},
+        "2": {"damage": 15, "radius": 160, "tick_rate": 0.5},
+        "3": {"damage": 18, "radius": 180, "tick_rate": 0.4},
+        "4": {"damage": 22, "radius": 200, "tick_rate": 0.4},
+        "5": {"damage": 30, "radius": 260, "tick_rate": 0.3}
+    }
+}
+==============================
+FILE: data\configs\weapons\starter.json
+==============================
+{
+    "id": "starter_gun",
+    "name": "赛博左轮",
+    "damage": 15,
+    "logic_type": "projectile"
+}
+==============================
+FILE: data\configs\weapons\starter_gun.json
+==============================
+{
+    "id": "starter_gun",
+    "name": "赛博左轮",
+    "logic_type": "projectile",
+    "max_level": 5,
+    "levels": {
+        "1": {"damage": 15, "cooldown": 450, "count": 1, "desc": "基础射线"},
+        "2": {"damage": 18, "cooldown": 400, "count": 1, "desc": "射速提升"},
+        "3": {"damage": 18, "cooldown": 400, "count": 2, "desc": "双重连发"},
+        "4": {"damage": 22, "cooldown": 350, "count": 2, "desc": "威力加强"},
+        "5": {"damage": 25, "cooldown": 300, "count": 3, "desc": "火力全开"}
+    }
+}
+==============================
+FILE: main.py
+==============================
+from core.engine import GameEngine
+
+if __name__ == '__main__':
+    game = GameEngine()
+    game.run()
+==============================
+FILE: setup_all.py
+==============================
+import os
+
+
+def create_file(path, content):
+    # 修复：只有当路径包含目录时才创建目录
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip())
+    print(f"✅ Created: {path}")
+
+
+# --- 1. 核心宪法: constants.py ---
+CONSTANTS_PY = """
+import pygame
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+TILE_SIZE = 64
+# 工业级图层系统
+LAYER_BG = 0
+LAYER_PICKUP = 10
+LAYER_ENEMY = 20
+LAYER_PLAYER = 30
+LAYER_PROJECTILE = 40
+LAYER_UI = 100
+# 配色
+COLOR_BG = (12, 12, 20)
+COLOR_GRID = (30, 30, 50)
+COLOR_PLAYER = (0, 255, 240)
+COLOR_ENEMY = (255, 50, 80)
+"""
+
+# --- 2. 实体基类: base_entity.py (解耦核心) ---
+BASE_ENTITY_PY = """
+import pygame
+from core.constants import *
+
+class BaseEntity(pygame.sprite.Sprite):
+    def __init__(self, pos, groups, layer=LAYER_BG):
+        super().__init__(groups)
+        self.z_index = layer
+        self.pos = pygame.math.Vector2(pos)
+        self.image = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(center=pos)
+
+    def update(self, dt):
+        pass
+"""
+
+# --- 3. 平滑摄像机: camera.py (打击感核心) ---
+CAMERA_PY = """
+import pygame
+from core.constants import *
+
+class CameraGroup(pygame.sprite.Group):
+    def __init__(self):
+        super().__init__()
+        self.display_surface = pygame.display.get_surface()
+        self.offset = pygame.math.Vector2()
+
+    def custom_draw(self, player):
+        # 丝滑跟随 (Lerp)
+        self.offset.x += (player.rect.centerx - WIDTH // 2 - self.offset.x) * 0.1
+        self.offset.y += (player.rect.centery - HEIGHT // 2 - self.offset.y) * 0.1
+
+        # 绘制背景
+        self.display_surface.fill(COLOR_BG)
+
+        # 按照 z_index 和 y 坐标排序绘制 (伪3D/层级管理)
+        for sprite in sorted(self.sprites(), key=lambda s: (getattr(s, 'z_index', 0), s.rect.centery)):
+            offset_pos = sprite.rect.topleft - self.offset
+            self.display_surface.blit(sprite.image, offset_pos)
+"""
+
+# --- 4. 注册中心: registry.py (即插即用核心) ---
+REGISTRY_PY = """
+import os, json
+class Registry:
+    def __init__(self):
+        self.weapons = {}
+        self.enemies = {}
+    def load(self):
+        paths = {'weapons': 'data/configs/weapons', 'enemies': 'data/configs/enemies'}
+        for key, path in paths.items():
+            if not os.path.exists(path): os.makedirs(path); continue
+            for f in os.listdir(path):
+                if f.endswith(".json"):
+                    with open(os.path.join(path, f), 'r', encoding='utf-8') as file:
+                        data = json.load(file)
+                        getattr(self, key)[data['id']] = data
+        print(f"📦 Registry loaded: {len(self.weapons)} Weapons")
+registry = Registry()
+"""
+
+# --- 5. 核心引擎: engine.py ---
+ENGINE_PY = """
+import pygame
+from core.constants import *
+from core.registry import registry
+from core.camera import CameraGroup
+
+class GameEngine:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.clock = pygame.time.Clock()
+        self.running = True
+
+        # 初始化核心系统
+        registry.load()
+        self.all_sprites = CameraGroup()
+
+        # 临时创建一个玩家展示
+        from entities.player import Player
+        self.player = Player((WIDTH//2, HEIGHT//2), [self.all_sprites])
+
+    def run(self):
+        while self.running:
+            dt = self.clock.tick(FPS) / 1000.0
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: self.running = False
+
+            self.all_sprites.update(dt)
+            self.all_sprites.custom_draw(self.player)
+            pygame.display.flip()
+"""
+
+# --- 6. 玩家外壳: player.py ---
+PLAYER_PY = """
+import pygame
+from entities.base_entity import BaseEntity
+from core.constants import *
+
+class Player(BaseEntity):
+    def __init__(self, pos, groups):
+        super().__init__(pos, groups, LAYER_PLAYER)
+        pygame.draw.circle(self.image, COLOR_PLAYER, (TILE_SIZE//2, TILE_SIZE//2), 20)
+        self.speed = 400
+
+    def update(self, dt):
+        keys = pygame.key.get_pressed()
+        direction = pygame.math.Vector2(
+            (keys[pygame.K_d] or keys[pygame.K_RIGHT]) - (keys[pygame.K_a] or keys[pygame.K_LEFT]),
+            (keys[pygame.K_s] or keys[pygame.K_DOWN]) - (keys[pygame.K_w] or keys[pygame.K_UP])
+        )
+        if direction.length() > 0:
+            direction = direction.normalize()
+        self.pos += direction * self.speed * dt
+        self.rect.center = (round(self.pos.x), round(self.pos.y))
+"""
+
+# --- 7. 样例武器数据 ---
+WEAPON_JSON = """
+{
+    "id": "starter_gun",
+    "name": "赛博左轮",
+    "damage": 15,
+    "logic_type": "projectile"
+}
+"""
+
+if __name__ == "__main__":
+    create_file("core/constants.py", CONSTANTS_PY)
+    create_file("core/camera.py", CAMERA_PY)
+    create_file("core/registry.py", REGISTRY_PY)
+    create_file("core/event_bus.py",
+                "class EventBus:\\n    def __init__(self): self.listeners = {}\\n    def emit(self, e, **k): pass\\nbus = EventBus()")
+    create_file("core/engine.py", ENGINE_PY)
+    create_file("entities/base_entity.py", BASE_ENTITY_PY)
+    create_file("entities/player.py", PLAYER_PY)
+    create_file("entities/components/stats.py", "class StatsComponent:\\n    def __init__(self, config): pass")
+    create_file("data/configs/weapons/starter.json", WEAPON_JSON)
+    create_file("main.py", "from core.engine import GameEngine\\nif __name__ == '__main__':\\n    GameEngine().run()")
+
+    # 建立缺失目录
+    for d in ["combat/weapons", "entities/enemies", "ui/hud", "assets/textures"]:
+        os.makedirs(d, exist_ok=True)
+
+    print("\\n🚀 [CyberSurvivor_Pro] 工业化架构初始化成功！请运行 main.py。")
+==============================
+FILE: setup_final.py
+==============================
+import os
+
+
+def create_file(path, content):
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip())
+    print(f"✅ 成功创建: {path}")
+
+
+# --- 1. constants.py ---
+CONSTANTS_PY = """
+import pygame
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+TILE_SIZE = 64
+LAYER_BG, LAYER_PICKUP, LAYER_ENEMY, LAYER_PLAYER, LAYER_PROJECTILE, LAYER_UI = 0, 10, 20, 30, 40, 100
+COLOR_BG = (12, 12, 20)
+COLOR_GRID = (35, 35, 55)
+COLOR_PLAYER = (0, 255, 240)
+COLOR_ENEMY = (255, 50, 80)
+"""
+
+# --- 2. base_entity.py ---
+BASE_ENTITY_PY = """
+import pygame
+from core.constants import *
+
+class BaseEntity(pygame.sprite.Sprite):
+    def __init__(self, pos, groups, layer=LAYER_BG):
+        super().__init__(groups)
+        self.z_index = layer
+        self.pos = pygame.math.Vector2(pos)
+        self.image = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(center=pos)
+
+    def update(self, dt):
+        pass
+"""
+
+# --- 3. camera.py ---
+CAMERA_PY = """
+import pygame
+from core.constants import *
+
+class CameraGroup(pygame.sprite.Group):
+    def __init__(self):
+        super().__init__()
+        self.display_surface = pygame.display.get_surface()
+        self.offset = pygame.math.Vector2()
+
+    def custom_draw(self, player):
+        # 丝滑跟随 (Lerp)
+        self.offset.x += (player.rect.centerx - WIDTH // 2 - self.offset.x) * 0.1
+        self.offset.y += (player.rect.centery - HEIGHT // 2 - self.offset.y) * 0.1
+
+        self.display_surface.fill(COLOR_BG)
+
+        # 排序绘制
+        for sprite in sorted(self.sprites(), key=lambda s: (getattr(s, 'z_index', 0), s.rect.centery)):
+            offset_pos = sprite.rect.topleft - self.offset
+            self.display_surface.blit(sprite.image, offset_pos)
+"""
+
+# --- 4. registry.py ---
+REGISTRY_PY = """
+import os, json
+class Registry:
+    def __init__(self):
+        self.weapons = {}
+        self.enemies = {}
+    def load(self):
+        paths = {'weapons': 'data/configs/weapons', 'enemies': 'data/configs/enemies'}
+        for key, path in paths.items():
+            if not os.path.exists(path): os.makedirs(path); continue
+            for f in os.listdir(path):
+                if f.endswith(".json"):
+                    with open(os.path.join(path, f), 'r', encoding='utf-8') as file:
+                        data = json.load(file)
+                        self.__dict__[key][data['id']] = data
+        print(f"📦 注册中心已加载武器: {list(self.weapons.keys())}")
+registry = Registry()
+"""
+
+# --- 5. engine.py ---
+ENGINE_PY = """
+import pygame
+from core.constants import *
+from core.registry import registry
+from core.camera import CameraGroup
+from entities.player import Player
+
+class GameEngine:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.clock = pygame.time.Clock()
+        self.running = True
+
+        registry.load()
+        self.all_sprites = CameraGroup()
+        self.player = Player((WIDTH//2, HEIGHT//2), [self.all_sprites])
+
+    def run(self):
+        while self.running:
+            dt = self.clock.tick(FPS) / 1000.0
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: self.running = False
+
+            self.all_sprites.update(dt)
+            self.all_sprites.custom_draw(self.player)
+            pygame.display.flip()
+"""
+
+# --- 6. player.py ---
+PLAYER_PY = """
+import pygame
+from entities.base_entity import BaseEntity
+from core.constants import *
+
+class Player(BaseEntity):
+    def __init__(self, pos, groups):
+        super().__init__(pos, groups, LAYER_PLAYER)
+        pygame.draw.circle(self.image, COLOR_PLAYER, (TILE_SIZE//2, TILE_SIZE//2), 20)
+        self.speed = 400
+
+    def update(self, dt):
+        keys = pygame.key.get_pressed()
+        direction = pygame.math.Vector2(
+            (keys[pygame.K_d] or keys[pygame.K_RIGHT]) - (keys[pygame.K_a] or keys[pygame.K_LEFT]),
+            (keys[pygame.K_s] or keys[pygame.K_DOWN]) - (keys[pygame.K_w] or keys[pygame.K_UP])
+        )
+        if direction.length() > 0:
+            direction = direction.normalize()
+        self.pos += direction * self.speed * dt
+        self.rect.center = (round(self.pos.x), round(self.pos.y))
+"""
+
+# --- 7. main.py ---
+MAIN_PY = """
+from core.engine import GameEngine
+
+if __name__ == '__main__':
+    game = GameEngine()
+    game.run()
+"""
+
+# --- 执行 ---
+if __name__ == "__main__":
+    create_file("core/constants.py", CONSTANTS_PY)
+    create_file("core/camera.py", CAMERA_PY)
+    create_file("core/registry.py", REGISTRY_PY)
+    create_file("core/engine.py", ENGINE_PY)
+    create_file("entities/base_entity.py", BASE_ENTITY_PY)
+    create_file("entities/player.py", PLAYER_PY)
+    create_file("main.py", MAIN_PY)
+
+    # 创建必要的空目录
+    for d in ["data/configs/weapons", "data/configs/enemies", "entities/components", "combat/weapons"]:
+        os.makedirs(d, exist_ok=True)
+
+    # 创建一个空的 stats.py 防止导入错误
+    create_file("entities/components/stats.py", "class StatsComponent:\\n    def __init__(self, config): pass")
+    # 创建一个空的 event_bus.py
+    create_file("core/event_bus.py", "class EventBus:\\n    def __init__(self): pass\\nbus = EventBus()")
+
+    print("\n🚀 [CyberSurvivor_Pro] 初始化成功！请运行 main.py 测试。")
+==============================
+FILE: setup_project.py
+==============================
+import os
+
+
+def create_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip())
+    print(f"✅ 已创建文件: {path}")
+
+
+# --- 1. 全局常量 (Constitution) ---
+CONSTANTS_PY = """
+import pygame
+WIDTH, HEIGHT = 1280, 720
+FPS = 60
+TILE_SIZE = 64
+# 渲染层级
+LAYER_BG, LAYER_PICKUP, LAYER_ENEMY, LAYER_PLAYER, LAYER_PROJECTILE, LAYER_UI = 0, 10, 20, 30, 40, 100
+# 配色
+COLOR_BG = (10, 10, 18)
+COLOR_GRID = (35, 35, 60)
+COLOR_PLAYER = (0, 255, 240)
+COLOR_ENEMY = (255, 45, 85)
+COLOR_TEXT = (245, 245, 245)
+"""
+
+# --- 2. 自动注册中心 (The Brain) ---
+REGISTRY_PY = """
+import os, json
+class Registry:
+    def __init__(self):
+        self.weapons = {}
+        self.enemies = {}
+        self.characters = {}
+    def load(self):
+        for cat in ['weapons', 'enemies', 'characters']:
+            path = f"data/configs/{cat}"
+            if not os.path.exists(path): os.makedirs(path); continue
+            for f in os.listdir(path):
+                if f.endswith(".json"):
+                    with open(os.path.join(path, f), 'r', encoding='utf-8') as file:
+                        data = json.load(file)
+                        self.__dict__[cat][data['id']] = data
+        print(f"📦 Registry loaded: {len(self.weapons)} Weapons")
+registry = Registry()
+"""
+
+# --- 3. 事件总线 (The Nervous System) ---
+EVENT_BUS_PY = """
+class EventBus:
+    def __init__(self):
+        self.listeners = {}
+    def subscribe(self, event_type, callback):
+        if event_type not in self.listeners: self.listeners[event_type] = []
+        self.listeners[event_type].append(callback)
+    def emit(self, event_type, **kwargs):
+        if event_type in self.listeners:
+            for callback in self.listeners[event_type]: callback(**kwargs)
+bus = EventBus()
+"""
+
+# --- 4. 万能属性组件 (The Soul) ---
+STATS_PY = """
+class Attribute:
+    def __init__(self, base):
+        self.base = base
+        self.flat = 0
+        self.mult = 0
+    @property
+    def value(self):
+        return (self.base + self.flat) * (1 + self.mult)
+
+class StatsComponent:
+    def __init__(self, config):
+        self.hp = Attribute(config.get('hp', 100))
+        self.speed = Attribute(config.get('speed', 400))
+        self.atk = Attribute(config.get('atk', 10))
+        self.crit_rate = Attribute(0.05)
+        self.pickup_range = Attribute(150)
+        # 冗余位
+        self.luck = Attribute(1.0)
+        self.armor = Attribute(0)
+"""
+
+# --- 5. 样例数据 (Content) ---
+WEAPON_JSON = """
+{
+    "id": "starter_gun",
+    "name": "初始机枪",
+    "atk": 12,
+    "cooldown": 500,
+    "pierce": 1,
+    "logic": "projectile"
+}
+"""
+
+# --- 6. 核心引擎 (The Heart) ---
+ENGINE_PY = """
+import pygame
+from core.constants import *
+from core.registry import registry
+from core.event_bus import bus
+
+class GameEngine:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.clock = pygame.time.Clock()
+        self.running = True
+        registry.load() # 启动即加载所有JSON
+
+    def run(self):
+        while self.running:
+            dt = self.clock.tick(FPS) / 1000.0
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: self.running = False
+            self.screen.fill(COLOR_BG)
+            pygame.display.flip()
+"""
+
+# --- 执行初始化 ---
+if __name__ == "__main__":
+    create_file("core/constants.py", CONSTANTS_PY)
+    create_file("core/registry.py", REGISTRY_PY)
+    create_file("core/event_bus.py", EVENT_BUS_PY)
+    create_file("entities/components/stats.py", STATS_PY)
+    create_file("core/engine.py", ENGINE_PY)
+    create_file("data/configs/weapons/starter_gun.json", WEAPON_JSON)
+    create_file("main.py", "from core.engine import GameEngine\\nif __name__ == '__main__':\\n    GameEngine().run()")
+
+    # 建立其他必要的空文件夹
+    dirs = ["assets/textures", "assets/sfx", "entities/enemies", "combat/weapons", "ui/hud"]
+    for d in dirs: os.makedirs(d, exist_ok=True); print(f"📁 已创建文件夹: {d}")
+
+    print("\\n🚀 [CyberSurvivor_Pro] 工业化地基浇筑完成！请直接运行 main.py 测试。")
