@@ -1,0 +1,11 @@
+{
+    "id": "heavy_metal",
+    "name": "重金属",
+    "desc": "装甲厚重，自带防御性光环。",
+    "starting_weapon": "cyber_aura",
+    "base_stats": {
+        "health": 200,
+        "move_speed": 280,
+        "damage_mult": 0.0
+    }
+}

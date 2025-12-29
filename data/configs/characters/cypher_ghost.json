@@ -1,0 +1,11 @@
+{
+    "id": "cypher_ghost",
+    "name": "赛博幽灵",
+    "desc": "高机动性，擅长远程袭扰。",
+    "starting_weapon": "starter_gun",
+    "base_stats": {
+        "health": 80,
+        "move_speed": 450,
+        "damage_mult": 0.2
+    }
+}
