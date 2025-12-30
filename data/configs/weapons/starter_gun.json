@@ -1,13 +1,29 @@
 {
-    "id": "starter_gun",
-    "name": "赛博左轮",
-    "logic_type": "projectile",
-    "max_level": 5,
-    "levels": {
-        "1": {"damage": 15, "cooldown": 450, "count": 1, "desc": "基础射线"},
-        "2": {"damage": 18, "cooldown": 400, "count": 1, "desc": "射速提升"},
-        "3": {"damage": 18, "cooldown": 400, "count": 2, "desc": "双重连发"},
-        "4": {"damage": 22, "cooldown": 350, "count": 2, "desc": "威力加强"},
-        "5": {"damage": 25, "cooldown": 300, "count": 3, "desc": "火力全开"}
-    }
+  "id": "starter_gun",
+  "name": "赛博左轮",
+  "desc": "基础款能量射线，性能极其稳定。",
+  "logic_type": "projectile",
+  "max_level": 5,
+  "params": {
+    "count": 1,
+    "angle_spread": 10
+  },
+  "logic": {
+    "cooldown": 450,
+    "phases": [
+      { "type": "linear", "speed": 1000, "duration": 1.5 }
+    ]
+  },
+  "visuals": {
+    "color": [0, 255, 240],
+    "bullet_size": [12, 6],
+    "shape": "rect"
+  },
+  "levels": {
+    "1": { "damage": 15, "cooldown": 450 },
+    "2": { "damage": 18, "cooldown": 400 },
+    "3": { "damage": 18, "count": 2 },
+    "4": { "damage": 22, "cooldown": 350 },
+    "5": { "damage": 25, "count": 3, "cooldown": 300 }
+  }
 }
