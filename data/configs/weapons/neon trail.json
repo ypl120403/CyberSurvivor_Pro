@@ -1,0 +1,13 @@
+{
+  "id": "neon_trail",
+  "logic_type": "AreaEffectEntity",
+  "cooldown": 100,
+  "radius": 40,
+  "damage": 2,
+  "behavior": {
+    "is_attached": false,
+    "max_duration": 1.0,
+    "tick_interval": 0.2,
+    "shape": "circle"
+  }
+}

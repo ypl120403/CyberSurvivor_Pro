@@ -1,0 +1,13 @@
+{
+  "id": "nano_mine",
+  "logic_type": "AreaEffectEntity",
+  "cooldown": 2000,
+  "radius": 80,
+  "damage": 50,
+  "behavior": {
+    "is_attached": false,
+    "max_duration": 3.0,
+    "tick_interval": 0.1,
+    "shape": "circle"
+  }
+}

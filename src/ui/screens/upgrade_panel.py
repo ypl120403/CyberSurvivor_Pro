@@ -71,10 +71,16 @@ class UpgradePanel:
         self.options = random.sample(pool, count)
 
     def reroll(self):
-        if self.reroll_count > 0:
+        # 维度 5: 检测玩家特权标签
+        has_infinite = "infinite_reroll" in getattr(self.player, 'privilege_tags', set())
+
+        if has_infinite:
+            # 特权逻辑：不消耗 reroll_count
+            print("💎 特权生效：无限刷新！")
+            self._generate_options()
+        elif self.reroll_count > 0:
             self.reroll_count -= 1
             self._generate_options()
-            self.show_time = pygame.time.get_ticks()
 
     def draw(self):
         if not self.visible: return

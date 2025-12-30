@@ -1,13 +1,25 @@
 {
-    "id": "cyber_aura",
-    "name": "赛博光环",
-    "logic_type": "cyber_aura",
-    "max_level": 5,
-    "levels": {
-        "1": {"damage": 12, "radius": 140, "tick_rate": 0.5},
-        "2": {"damage": 15, "radius": 160, "tick_rate": 0.5},
-        "3": {"damage": 18, "radius": 180, "tick_rate": 0.4},
-        "4": {"damage": 22, "radius": 200, "tick_rate": 0.4},
-        "5": {"damage": 30, "radius": 260, "tick_rate": 0.3}
-    }
+  "id": "cyber_aura",
+  "name": "赛博光环",
+  "logic_type": "AreaEffectEntity",
+  "radius": 150,
+  "damage": 10,
+  "behavior": {
+    "is_attached": true,
+    "max_duration": 99999,
+    "tick_interval": 0.5
+  },
+  "stats": {
+    "on_equip": { "armor": 5 },
+    "tags": ["vampire"]
+  },
+  "visuals": {
+    "color": [0, 255, 240, 50],
+    "hit_stop_duration": 10
+  },
+  "levels": {
+    "1": { "damage": 10, "radius": 150 },
+    "2": { "damage": 12, "radius": 170 },
+    "3": { "damage": 15, "radius": 200, "tick_interval": 0.4 }
+  }
 }

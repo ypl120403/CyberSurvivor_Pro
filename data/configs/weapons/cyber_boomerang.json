@@ -1,0 +1,25 @@
+{
+  "weapon_id": "cyber_boomerang_01",
+  "name": "赛博回旋镖",
+  "targeting": "closest",
+  "damage": 30,
+  "logic": {
+    "cooldown": 1200,
+    "phases": [
+      { "name": "out", "type": "linear", "speed": 700, "duration": 0.6 },
+      { "name": "hover", "type": "rotate", "radius": 40, "duration": 0.4, "rotation_speed": 15 },
+      { "name": "return", "type": "homing_player", "speed_start": 300, "accel": 600, "duration": 2.0 }
+    ]
+  },
+  "stats": {
+    "on_equip": { "luck": 2, "move_speed": 20 },
+    "tags": ["infinite_reroll"]
+  },
+  "events": [
+    { "trigger": "on_hit", "action": "spawn_area", "id": "emp_zone_small", "chance": 0.2 }
+  ],
+  "visuals": {
+    "color": [0, 255, 255],
+    "shake_intensity": 2
+  }
+}

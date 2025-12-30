@@ -6,7 +6,7 @@
     "base_stats": {
         "health": 120,
         "move_speed": 400,
-        "damage_mult": 10.2,
+        "damage_mult": 1.5,
         "cooldown_reduction": 0.1
     },
     "starting_weapon_config": {
